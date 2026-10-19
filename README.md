@@ -57,14 +57,9 @@ Each file changed this session, with how often and when it was last touched, and
 
 ## How decisions get in
 
-```mermaid
-flowchart LR
-  A["Claude's choices<br/>(decide tool)"] --> T[Trail pane]
-  B["Your answers to its questions,<br/>plan approvals"] --> T
-  C["/decide"] --> T
-  T --> S[(Saved per project folder)]
-  S -->|"next session"| P["Claude's instructions:<br/>decisions already made"]
-```
+<p align="center">
+  <img src="docs/flow.svg" alt="Claude's choices, your answers and plan approvals, and /decide all feed the Trail pane; decisions are saved per project and given back to Claude in the next session" width="700">
+</p>
 
 - **Claude's own.** Trail gives Claude a `decide` tool and a short instruction: log a non-obvious choice (an approach, a library, a scope cut, an assumption) at the moment it's made, with the reason and what it passed over. When a choice changes an earlier one, Claude names it and the old one is struck through as replaced.
 - **Yours.** Answers to Claude's multiple-choice questions and plan approvals are logged as yours automatically. Anything else, log it yourself:

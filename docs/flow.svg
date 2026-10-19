@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="693" height="248" viewBox="0 0 693 248">
+<rect width="693" height="248" rx="10" fill="#262626"/>
+<g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', 'Liberation Mono', monospace" font-size="14">
+<text x="22.0" y="34.6" fill="#d78787" xml:space="preserve"> Claude&#x27;s choices, logged  </text>
+<text x="249.6" y="34.6" fill="#949494" xml:space="preserve">─┐</text>
+<text x="22.0" y="51.6" fill="#d78787" xml:space="preserve"> as they&#x27;re made            </text>
+<text x="258.0" y="51.6" fill="#949494" xml:space="preserve">│</text>
+<text x="22.0" y="68.6" fill="#949494" xml:space="preserve">                            │     ┌────────────┐     ┌───────────────────┐</text>
+<text x="22.0" y="85.6" fill="#afd7ff" xml:space="preserve"> Your answers and plan      </text>
+<text x="258.0" y="85.6" fill="#949494" xml:space="preserve">├────►│</text>
+<text x="317.1" y="85.6" fill="#d78787" font-weight="700" xml:space="preserve"> Trail pane </text>
+<text x="418.2" y="85.6" fill="#949494" xml:space="preserve">├────►│</text>
+<text x="477.2" y="85.6" fill="#d0d0d0" xml:space="preserve"> saved per project </text>
+<text x="637.4" y="85.6" fill="#949494" xml:space="preserve">│</text>
+<text x="22.0" y="102.6" fill="#afd7ff" xml:space="preserve"> approvals, automatically   </text>
+<text x="258.0" y="102.6" fill="#949494" xml:space="preserve">│     └────────────┘     └─────────┬─────────┘</text>
+<text x="22.0" y="119.6" fill="#949494" xml:space="preserve">                            │                                  │</text>
+<text x="22.0" y="136.6" fill="#afd7ff" xml:space="preserve"> /decide, for the rest     </text>
+<text x="249.6" y="136.6" fill="#949494" xml:space="preserve">─┘                                  │ next session</text>
+<text x="22.0" y="153.6" fill="#949494" xml:space="preserve">                                                               ▼</text>
+<text x="22.0" y="170.6" fill="#949494" xml:space="preserve">                                                   ┌────────────────────────┐</text>
+<text x="22.0" y="187.6" fill="#949494" xml:space="preserve">                                                   │</text>
+<text x="460.4" y="187.6" fill="#d0d0d0" xml:space="preserve"> Claude&#x27;s instructions: </text>
+<text x="662.7" y="187.6" fill="#949494" xml:space="preserve">│</text>
+<text x="22.0" y="204.6" fill="#949494" xml:space="preserve">                                                   │</text>
+<text x="460.4" y="204.6" fill="#d0d0d0" xml:space="preserve"> decisions already made </text>
+<text x="662.7" y="204.6" fill="#949494" xml:space="preserve">│</text>
+<text x="22.0" y="221.6" fill="#949494" xml:space="preserve">                                                   └────────────────────────┘</text>
+</g></svg>
