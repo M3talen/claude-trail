@@ -1,0 +1,11 @@
+{
+  "name": "trail",
+  "version": "0.1.0",
+  "description": "A live pane of what you asked, what was decided (by you or Claude) and why, and what changed",
+  "author": { "name": "m3talen" },
+  "homepage": "https://github.com/m3talen/claude-trail",
+  "repository": "https://github.com/m3talen/claude-trail",
+  "license": "MIT",
+  "keywords": ["decisions", "timeline", "pane", "session", "log"],
+  "types": "./types/index.d.ts"
+}

@@ -1,0 +1,12 @@
+{
+  "name": "claude-trail",
+  "owner": { "name": "m3talen" },
+  "description": "Trail: a Claude Code side pane that records a session's asks, decisions and changes",
+  "plugins": [
+    {
+      "name": "trail",
+      "source": "./",
+      "description": "A live pane of what you asked, what was decided (by you or Claude) and why, and what changed"
+    }
+  ]
+}

@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="794" height="350" viewBox="0 0 794 350">
+<rect width="794" height="350" rx="10" fill="#262626"/>
+<g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', 'Liberation Mono', monospace" font-size="14">
+<text x="30.4" y="34.6" fill="#ffd700" font-weight="700" xml:space="preserve">● Working 1:16</text>
+<text x="22.0" y="51.6" fill="#d0d0d0" xml:space="preserve">   Editing src/middleware/rate-limit.ts</text>
+<text x="22.0" y="68.6" fill="#d0d0d0" xml:space="preserve">   Agent: check the rate limiter</text>
+<text x="291.8" y="68.6" fill="#949494" xml:space="preserve"> (subagent)</text>
+<text x="30.4" y="102.6" fill="#afd7ff" xml:space="preserve">1</text>
+<text x="38.9" y="102.6" fill="#d0d0d0" xml:space="preserve">: Timeline  </text>
+<text x="140.0" y="102.6" fill="#afd7ff" xml:space="preserve">2</text>
+<text x="148.4" y="102.6" fill="#d0d0d0" xml:space="preserve">: Decisions</text>
+<text x="241.2" y="102.6" fill="#949494" xml:space="preserve"> 4</text>
+<text x="274.9" y="102.6" fill="#afd7ff" xml:space="preserve">3</text>
+<text x="283.3" y="102.6" fill="#d0d0d0" xml:space="preserve">: </text>
+<text x="300.2" y="102.6" fill="#d78787" font-weight="700" text-decoration="underline" xml:space="preserve">Files</text>
+<text x="342.3" y="102.6" fill="#949494" xml:space="preserve"> 3</text>
+<text x="696.4" y="102.6" fill="#afd7ff" xml:space="preserve">e</text>
+<text x="704.8" y="102.6" fill="#d0d0d0" xml:space="preserve">: </text>
+<text x="721.7" y="102.6" fill="#949494" xml:space="preserve">Export</text>
+<text x="30.4" y="119.6" fill="#949494" xml:space="preserve">────────────────────────────────────────────────────────────────────────────────────────</text>
+<text x="30.4" y="153.6" fill="#d0d0d0" font-weight="700" xml:space="preserve">Files</text>
+<text x="72.6" y="153.6" fill="#949494" font-weight="700" xml:space="preserve"> 3</text>
+<text x="22.0" y="170.6" fill="#d0d0d0" xml:space="preserve"> src/routes/login.tsx     </text>
+<rect x="249.6" y="160" width="67.4" height="13" rx="1.5" fill="#5f875f"/>
+<text x="333.9" y="170.6" fill="#949494" xml:space="preserve">   3  23:44</text>
+<text x="22.0" y="187.6" fill="#d0d0d0" xml:space="preserve"> src/auth/session-store.ts</text>
+<rect x="249.6" y="177" width="67.4" height="13" rx="1.5" fill="#5f875f"/>
+<text x="333.9" y="187.6" fill="#949494" xml:space="preserve">   3  23:16</text>
+<text x="22.0" y="204.6" fill="#d0d0d0" xml:space="preserve"> src/auth/magic-link.ts   </text>
+<rect x="249.6" y="194" width="84.3" height="13" rx="1.5" fill="#5f875f"/>
+<text x="333.9" y="204.6" fill="#949494" xml:space="preserve">   4  23:08</text>
+<text x="30.4" y="238.6" fill="#d0d0d0" font-weight="700" xml:space="preserve">Commands</text>
+<text x="97.9" y="238.6" fill="#949494" font-weight="700" xml:space="preserve"> 3</text>
+<text x="30.4" y="255.6" fill="#949494" xml:space="preserve">$ Install ioredis</text>
+<text x="30.4" y="272.6" fill="#949494" xml:space="preserve">$ Run the auth tests</text>
+<text x="30.4" y="289.6" fill="#ff87af" xml:space="preserve">✗ Run the auth tests</text>
+<text x="30.4" y="323.6" fill="#949494" xml:space="preserve">Click a file to mention it in your prompt.</text>
+</g></svg>
