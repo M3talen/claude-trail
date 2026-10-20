@@ -6,17 +6,39 @@ const CWD = '/proj'
 const COMPOSER = { kind: 'composer' } as const
 const PRESENTATION = { isFullscreen: true, columns: 160 }
 
-// The status line as the plugin last set it.
-const shown: { status?: string } = {}
+// What the plugin showed and sent: the status line as it last set it, its
+// toasts, the context each prompt carried, and its store.
+const shown: {
+  session: string
+  status?: string
+  toasts: string[]
+  contexts: Array<readonly string[] | undefined>
+  store: Record<string, unknown>
+} = { session: 'S1', toasts: [], contexts: [], store: {} }
 
 function world(on: On, store: Record<string, unknown> = {}) {
+  shown.session = 'S1'
   shown.status = undefined
+  shown.toasts = []
+  shown.contexts = []
+  shown.store = { ...store }
   const time = mock.clock(on, { now: Date.UTC(2026, 9, 19, 12, 0) })
-  mock.store(on, store)
+  on('store.get', ($, e) => ({ value: shown.store[e.key] }))
+  on('store.set', ($, e) => {
+    shown.store[e.key] = e.value
+
+    return { value: undefined }
+  })
+  on('store.delete', ($, e) => {
+    delete shown.store[e.key]
+
+    return { value: undefined }
+  })
+  on('store.keys', () => ({ value: Object.keys(shown.store) }))
   on('session.start', () => ({ cwd: CWD }))
   on('session.cwd', () => ({ value: CWD }))
   on('session.root', () => ({ value: CWD }))
-  on('session.id', () => ({ value: 'S1' }))
+  on('session.id', () => ({ value: shown.session }))
   on('tool.register', ($, e) => ({ value: { tool: `mcp__trail__${e.name}` } }))
   on('command.register', ($, e) => ({ value: { command: e.name } }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
@@ -25,12 +47,21 @@ function world(on: On, store: Record<string, unknown> = {}) {
 
     return { value: undefined }
   })
-  on('ui.toast', () => ({ value: undefined }))
-  on('prompt.submit', ($, e) => ({ text: e.text }))
+  on('ui.toast', ($, e) => {
+    shown.toasts.push(e.text)
+
+    return { value: undefined }
+  })
+  on('prompt.submit', ($, e) => {
+    shown.contexts.push(e.context)
+
+    return { text: e.text }
+  })
   on('tool.call', ($, e) => ({ result: { ok: true }, text: `${e.tool} ran` }))
   on('turn.start', ($, e) => ({ turnId: e.turnId }))
   on('session.end', ($, e) => ({ sessionId: e.sessionId }))
   on('turn.complete', () => ({ text: '' }))
+  on('skill.prompt', ($, e) => ({ text: e.text }))
 
   return time
 }
@@ -667,4 +698,328 @@ test('hand-written team lines read back whole', async ($, on) => {
 
   const out = await $.tool.call({ tool: DECIDE, what: 'SQLite', why: 'w', by: 'user', replaces: 'use postgres' })
   expect(out.result).toBe('Logged: SQLite (replaces: Use  Postgres)')
+})
+
+const BASE = { model: 'm', promptModel: 'm', surfaces: [], outputStyle: null, traits: [] }
+
+// git as a repository answers it: rev-parse reads HEAD from `heads` in turn.
+function repo(on: On, heads: string[]) {
+  const asked: string[] = []
+  on('process.run', ($, e) => {
+    asked.push(e.argv.join(' '))
+    const sub = e.argv[1]
+    const out =
+      sub === 'rev-parse'
+        ? (heads.shift() ?? '')
+        : sub === 'log'
+          ? 'Move sessions to Redis'
+          : sub === 'diff' || sub === 'show'
+            ? '+import Redis from "ioredis"'
+            : ''
+    const failed = sub === 'rev-parse' && out === ''
+
+    return {
+      value: { exitCode: failed ? 1 : 0, stdout: failed ? '' : `${out}\n`, stderr: '', isStdoutTruncated: false, isStderrTruncated: false },
+    }
+  })
+
+  return asked
+}
+
+test('a commit that goes against a standing decision is flagged, and Claude told', async ($, on) => {
+  const asked = repo(on, ['aaa', 'bbb', 'bbb', 'bbb'])
+  const prompts: string[] = []
+  on('model.complete', ($, e) => {
+    prompts.push(e.prompt)
+    const line = e.prompt.split('\n').find(one => /^\d+\. Postgres for sessions/.test(one))
+
+    return { value: { isAnswered: true, text: e.prompt.includes("The commit's message") && line ? line.split('.')[0]! : '0', usage: USAGE } }
+  })
+  world(on)
+  await start($)
+  await $.tool.call({ tool: DECIDE, what: 'Postgres for sessions', why: 'Already running.', by: 'user' })
+  await $.tool.call({ tool: 'Bash', command: 'npm test', description: 'Run the tests' })
+  expect(asked.filter(one => !one.startsWith('git config'))).toEqual([])
+
+  const out = await $.tool.call({ tool: 'Bash', command: 'git add -A && git commit -m "Redis"', description: 'Commit the Redis store' })
+  expect(out.context?.[0]).toContain('this commit appears to go against "Postgres for sessions", a decision the person made')
+  const check = prompts.find(one => one.includes("The commit's message"))!
+  expect(check).toContain('1. Postgres for sessions (Already running.)')
+  expect(check).toContain('Move sessions to Redis')
+  expect(check).toContain('+import Redis from "ioredis"')
+  expect(asked.some(one => one.startsWith('git diff') && one.includes('aaa bbb') && one.includes(':(exclude)*.lock'))).toBe(true)
+
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount(pane(surface))
+    expect(await ui.find({ text: /≠ goes against "Postgres for sessions"/ })).toBeDefined()
+    await ui.press({ key: 'tab-files' })
+    expect(await ui.find({ text: /≠ goes against "Postgres for sessions"/ })).toBeDefined()
+    await ui.unmount()
+  }
+  // Commits are not standing conflicts: the status line stays clear.
+  expect(shown.status).toBeUndefined()
+
+  // A commit command that made no commit is not checked.
+  const before = prompts.length
+  const none = await $.tool.call({ tool: 'Bash', command: 'git commit -m "nothing"', description: 'Commit nothing' })
+  expect(none.context).toBeUndefined()
+  expect(prompts.length).toBe(before)
+
+  // Once the decision is replaced, the commit's mark settles.
+  await $.tool.call({ tool: DECIDE, what: 'Redis for sessions', why: 'w', by: 'user', replaces: 'Postgres for sessions' })
+  const ui = await $.ui.mount(pane('terminal'))
+  expect(await ui.find({ text: /goes against/ })).toBeUndefined()
+})
+
+test('a team decision that arrives is announced once, checked, and told to Claude', async ($, on) => {
+  const files = disk(on, { [SHARED]: '- **pnpm, not npm** _(Sam, 2026-10-02)_\n' })
+  judge(on, { 'Redis for sessions': 'Postgres for sessions' })
+  const time = world(on)
+  await start($)
+  // What was in the file when Trail first read it is not news.
+  expect(shown.toasts).toEqual([])
+  await $.tool.call({ tool: DECIDE, what: 'Postgres for sessions', why: 'Already running.', by: 'user' })
+
+  files[SHARED] += '- **Redis for sessions** — Built-in expiry. _(Bo, 2026-10-19)_\n- **Tabs** _(Ada, 2026-10-19)_\n'
+  await $.prompt.submit({ text: 'carry on', origin: COMPOSER, wait: false })
+  expect(shown.toasts).toContain('1 new team decision from Bo in .claude/decisions.md')
+  await time.settle()
+  expect(shown.status).toBe('1 decision contradicts a standing one (Decisions tab)')
+  expect(shown.toasts).toContain('New team decision "Redis for sessions" contradicts "Postgres for sessions" (Decisions tab)')
+
+  const ui = await $.ui.mount(pane('terminal'))
+  await ui.press({ key: 'tab-decisions' })
+  expect(await ui.find({ text: /^new $/ })).toBeDefined()
+  expect(await ui.find({ text: /≠ conflicts with "Postgres for sessions"/ })).toBeDefined()
+  expect(await ui.find({ key: 'tab-decisions', text: /≠1/ })).toBeDefined()
+
+  // Read again, it is not news twice; Claude hears of the conflict once.
+  await $.prompt.submit({ text: 'and again', origin: COMPOSER, wait: false })
+  expect(shown.toasts.filter(one => one.includes('new team decision'))).toHaveLength(1)
+  const told = shown.contexts[shown.contexts.length - 1]?.[0] ?? ''
+  expect(told).toContain('"Redis for sessions" (Bo), appears to contradict "Postgres for sessions", a decision the person made')
+  await $.prompt.submit({ text: 'once more', origin: COMPOSER, wait: false })
+  expect(shown.contexts[shown.contexts.length - 1]).toBeUndefined()
+
+  // Settled by a replace, the mark clears.
+  await $.tool.call({ tool: DECIDE, what: 'Redis for sessions', why: 'w', by: 'user', replaces: 'Postgres for sessions' })
+  expect(shown.status).toBeUndefined()
+})
+
+test('what you share, and lines signed by you, are never news to you', async ($, on) => {
+  const files = disk(on, {})
+  judge(on)
+  world(on)
+  await start($)
+  await $.tool.call({ tool: DECIDE, what: 'SQLite for the cache', why: 'One user.', by: 'claude' })
+  await $.command.run({ command: 'decide', args: 'tabs in Go files', origin: COMPOSER, presentation: PRESENTATION })
+  await $.command.run({ command: 'trail', args: 'share', origin: COMPOSER, presentation: PRESENTATION })
+  files[SHARED] += '- **Written by me** _(Ada, 2026-10-19)_\n'
+  await $.prompt.submit({ text: 'next', origin: COMPOSER, wait: false })
+  expect(shown.toasts.filter(one => one.includes('new team decision'))).toEqual([])
+})
+
+test('the team file is read again when it changes on disk', async ($, on) => {
+  const files = disk(on, { [SHARED]: '- **pnpm, not npm** _(Sam, 2026-10-02)_\n' })
+  let mtime = 1
+  on('fs.stat', () => ({ value: { kind: 'file', size: 1, mtimeMs: mtime, isLink: false } }))
+  judge(on)
+  const time = world(on)
+  await start($)
+  await time.advance(5000)
+  files[SHARED] += '- **Tabs** _(Bo, 2026-10-19)_\n'
+  mtime = 2
+  await time.advance(5000)
+  await time.settle()
+  expect(shown.toasts).toContain('1 new team decision from Bo in .claude/decisions.md')
+  const ui = await $.ui.mount(pane('terminal'))
+  await ui.press({ key: 'tab-decisions' })
+  expect(await ui.find({ text: /Tabs/ })).toBeDefined()
+})
+
+test('a session leaves a handoff, and the next one opens with it', async ($, on) => {
+  let drafted = ''
+  on('prompt.fill', ($, e) => {
+    drafted = e.text
+
+    return { isFilled: true }
+  })
+  on('tool.call', { tool: 'Bash' }, () => ({ isError: true as const, result: 'exit 1', text: 'exit 1' }))
+  world(on, {
+    'handoff:/proj': {
+      session: 'S0',
+      at: Date.UTC(2026, 9, 18, 18, 0),
+      ask: 'Sketch the login page',
+      askAt: Date.UTC(2026, 9, 18, 17, 0),
+      durationMs: 184000,
+      isAborted: true,
+      question: 'Under /admin, or at the root?',
+      files: ['src/login.tsx'],
+      fileCount: 3,
+      failed: ['Run the e2e tests'],
+      conflicts: [],
+      assumptions: ['The mailer is up'],
+      summary: 'Login form done.\nStyles half way.',
+      summaryAt: Date.UTC(2026, 9, 18, 18, 0),
+    },
+  })
+  on('prompt.compose', () => ({ sections: [] }))
+  await start($)
+  const composed = await $.prompt.compose({ ...BASE, tools: [DECIDE] })
+  const text = composed.sections.find(one => one.id === 'trail:handoff')?.text ?? ''
+  expect(text).toContain('stopped after 3m 04s): Sketch the login page')
+  expect(text).toContain('  Login form done.')
+  expect(text).toContain('- Files changed: src/login.tsx and 2 more')
+  expect(text).toContain('- Failed and not run again: Run the e2e tests')
+  expect(text).toContain('- Your assumptions the person never confirmed: The mailer is up')
+  expect(text).toContain('- Your last reply ended on a question: Under /admin, or at the root?')
+
+  const ui = await $.ui.mount(pane('terminal'))
+  expect(await ui.find({ text: /last session/ })).toBeDefined()
+  expect(await ui.find({ text: /Sketch the login page/ })).toBeDefined()
+  expect(await ui.find({ text: /Styles half way/ })).toBeDefined()
+  expect(await ui.find({ text: /Under \/admin, or at the root\?/ })).toBeDefined()
+  await ui.press({ key: 'pick-up' })
+  expect(drafted).toBe('Pick up where the last session left off. ')
+
+  // This session's own turn becomes the handoff in the store, and the last
+  // session's stays on show, folded under the new turn.
+  await $.prompt.submit({ text: 'fix the e2e tests', origin: COMPOSER, wait: false })
+  await $.turn.start({ text: 'fix the e2e tests', turnId: 't1' })
+  await $.tool.call({ tool: 'Edit', file_path: `${CWD}/e2e/login.spec.ts`, old_string: 'a', new_string: 'b' })
+  await $.tool.call({ tool: 'Bash', command: 'npm run e2e', description: 'Run the e2e tests' })
+  await $.turn.complete({ answer: 'Two still fail.\n\nShall I skip them for now?', durationMs: 60000, isAborted: false, turnId: 't1', reason: 'answer' })
+  const saved = shown.store['handoff:/proj'] as Record<string, unknown>
+  expect(saved.session).toBe('S1')
+  expect(saved.ask).toBe('fix the e2e tests')
+  expect(saved.question).toBe('Shall I skip them for now?')
+  expect(saved.files).toEqual(['e2e/login.spec.ts'])
+  expect(saved.failed).toEqual(['Run the e2e tests'])
+  expect(await ui.find({ text: /Styles half way/ })).toBeUndefined()
+  await ui.press({ key: 'turn-last' })
+  expect(await ui.find({ text: /Styles half way/ })).toBeDefined()
+})
+
+test('/trail handoff saves a summary written from the conversation', async ($, on) => {
+  let asked = ''
+  on('model.fork', ($, e) => {
+    asked = e.prompt
+
+    return { value: { isAnswered: true, text: 'Done: the form.\n\nNext: the styles.', usage: USAGE } }
+  })
+  world(on)
+  await start($)
+  const empty = await $.command.run({ command: 'trail', args: 'handoff', origin: COMPOSER, presentation: PRESENTATION })
+  expect(empty.text).toContain('Nothing to hand off yet')
+  await $.prompt.submit({ text: 'build the form', origin: COMPOSER, wait: false })
+  const out = await $.command.run({ command: 'trail', args: 'handoff', origin: COMPOSER, presentation: PRESENTATION })
+  expect(asked).toContain('handoff note')
+  expect(out.text).toBe('Handoff saved for the next session here:\nDone: the form.\nNext: the styles.')
+  const saved = shown.store['handoff:/proj'] as Record<string, unknown>
+  expect(saved.summary).toBe('Done: the form.\nNext: the styles.')
+
+  // A later turn keeps the summary.
+  await $.turn.start({ text: 'go', turnId: 't1' })
+  await $.turn.complete({ answer: 'ok', durationMs: 1000, isAborted: false, turnId: 't1', reason: 'answer' })
+  expect((shown.store['handoff:/proj'] as Record<string, unknown>).summary).toBe('Done: the form.\nNext: the styles.')
+
+  // After /clear the conversation just cleared is the last session.
+  await $.session.end({ reason: 'clear', sessionId: 'S1', resume: { id: 'S1' } })
+  const ui = await $.ui.mount(pane('terminal'))
+  expect(await ui.find({ text: /last session/ })).toBeDefined()
+  expect(await ui.find({ text: /Next: the styles/ })).toBeDefined()
+})
+
+test('an assumption waits for you: confirmed it becomes your decision, rejected it starts your reply', async ($, on) => {
+  let drafted = ''
+  on('prompt.fill', ($, e) => {
+    drafted = e.text
+
+    return { isFilled: true }
+  })
+  judge(on)
+  world(on)
+  await start($)
+  await $.prompt.submit({ text: 'wire up the webhook', origin: COMPOSER, wait: false })
+  const logged = await $.tool.call({ tool: DECIDE, what: 'The webhook is idempotent', why: 'The docs say retries reuse the id.', by: 'claude', assumption: true })
+  expect(logged.result).toContain('Logged the assumption: The webhook is idempotent.')
+  await $.tool.call({ tool: DECIDE, what: 'Payments arrive in cents', why: 'w', by: 'claude', assumption: true })
+
+  const ui = await $.ui.mount(pane('terminal'))
+  expect(await ui.find({ text: /^\? $/ })).toBeDefined()
+  expect(await ui.find({ text: /assumed, not confirmed/ })).toBeDefined()
+  expect(await ui.find({ key: 'tab-decisions', text: /\?2/ })).toBeDefined()
+  await ui.press({ key: 'tab-decisions' })
+  expect(await ui.find({ text: /Assumed, not confirmed/ })).toBeDefined()
+  await ui.press({ key: 'tab-timeline' })
+
+  const confirm = await ui.find({ type: 'Button', text: /Confirm/ })
+  expect(confirm?.key).toMatch(/^confirm-/)
+  await ui.press({ key: confirm!.key! })
+  expect(await ui.find({ text: /you confirmed Claude's assumption/ })).toBeDefined()
+  expect(await ui.find({ key: 'tab-decisions', text: /Decisions 1 \?1/ })).toBeDefined()
+  const past = shown.store['past:/proj'] as Array<{ text: string; by: string }>
+  expect(past.map(one => `${one.by}: ${one.text}`)).toEqual(['user: The webhook is idempotent'])
+
+  const reject = await ui.find({ type: 'Button', text: /Reject/ })
+  await ui.press({ key: reject!.key! })
+  expect(drafted).toBe('Not so: "Payments arrive in cents". ')
+  expect(await ui.find({ text: /you rejected it/ })).toBeDefined()
+  expect(await ui.find({ type: 'Button', text: /Reject/ })).toBeUndefined()
+
+  await $.prompt.submit({ text: 'they arrive in euros', origin: COMPOSER, wait: false })
+  const told = shown.contexts[shown.contexts.length - 1]?.[0] ?? ''
+  expect(told).toContain('The person confirmed your assumption "The webhook is idempotent"')
+  expect(told).toContain('The person rejected your assumption "Payments arrive in cents"')
+})
+
+test('a /clear in the real engine, a new id and no session.start, still loads the project', async ($, on) => {
+  const time = world(on)
+  on('prompt.compose', () => ({ sections: [] }))
+  await start($)
+  await $.prompt.submit({ text: 'pick a store', origin: COMPOSER, wait: false })
+  await $.tool.call({ tool: DECIDE, what: 'Postgres for sessions', why: 'w', by: 'user' })
+  await $.turn.start({ text: 'pick a store', turnId: 't1' })
+  await $.turn.complete({
+    answer: 'Postgres it is.\n\nWhich pool size do you want?\n- 10\n- 20',
+    durationMs: 1000,
+    isAborted: false,
+    turnId: 't1',
+    reason: 'answer',
+  })
+  expect((shown.store['handoff:/proj'] as Record<string, unknown>).question).toBe('Which pool size do you want?')
+
+  // The engine starts the new id's state empty; the tick fills it. (The kit
+  // keeps this session's turns, so the last session shows folded.)
+  shown.session = 'S2'
+  await time.advance(1000)
+  const ui = await $.ui.mount(pane('terminal'))
+  expect(await ui.find({ text: /last session/ })).toBeDefined()
+  await ui.press({ key: 'turn-last' })
+  expect(await ui.find({ text: /Which pool size do you want\?/ })).toBeDefined()
+  const composed = await $.prompt.compose({ ...BASE, tools: [DECIDE] })
+  expect(composed.sections.find(one => one.id === 'trail:earlier')?.text).toContain('Postgres for sessions')
+  expect(composed.sections.find(one => one.id === 'trail:handoff')?.text).toContain('Last ask')
+})
+
+test("the pane's notes ride on a slash command's turn, never on one with no turn", async ($, on) => {
+  judge(on)
+  world(on)
+  await start($)
+  await $.prompt.submit({ text: 'wire the webhook', origin: COMPOSER, wait: false })
+  await $.tool.call({ tool: DECIDE, what: 'The webhook is idempotent', why: 'w', by: 'claude', assumption: true })
+  const ui = await $.ui.mount(pane('terminal'))
+  const confirm = await ui.find({ type: 'Button', text: /Confirm/ })
+  await ui.press({ key: confirm!.key! })
+
+  await $.prompt.submit({ text: '/help', command: { name: 'help', args: '' }, origin: COMPOSER, wait: false })
+  await $.prompt.submit({ text: '/review src', command: { name: 'review', args: 'src' }, origin: COMPOSER, wait: false })
+  const expanded = await $.skill.prompt({ skill: 'review', text: 'Review the code.', frontmatter: {}, source: 'built-in' })
+  expect(expanded.text).toContain('Review the code.\n\nFrom the trail pane:')
+  expect(expanded.text).toContain('The person confirmed your assumption "The webhook is idempotent"')
+
+  // Delivered once: the next prompt carries nothing more.
+  await $.turn.start({ text: expanded.text, turnId: 't2' })
+  await $.prompt.submit({ text: 'thanks', origin: COMPOSER, wait: false })
+  expect(shown.contexts[shown.contexts.length - 1]).toBeUndefined()
 })
