@@ -26,8 +26,14 @@ claude plugin install trail --marketplace m3talen/claude-trail
 
 In the desktop app, where `/plugin` does not run: click **+** next to the prompt box, then **Plugins**, **Add marketplace** with `m3talen/claude-trail`, then **Add plugin**.
 
+To update to a newer version, run this from a shell, then restart Claude Code:
+
+```sh
+claude plugin update trail
+```
+
 > [!NOTE]
-> Trail is a function-hooks mod, an early-access part of Claude Code. It was built and tested on Claude Code 2.1.303, and the mod API can change between releases.
+> Trail is a function-hooks mod, an early-access part of Claude Code. It was built and tested on Claude Code 2.1.303 and 2.1.304, and the mod API can change between releases.
 
 The pane docks beside the transcript in the fullscreen layout and opens by itself on terminals 144 columns or wider. Anywhere else, `/trail` opens it.
 
@@ -42,7 +48,7 @@ The top line always says what's happening now: `● Working 1:13` with what Clau
 ### Decisions
 
 <p align="center">
-  <img src="docs/decisions.svg" alt="The Decisions tab: standing, replaced and earlier-session decisions, with who made each one and when" width="720">
+  <img src="docs/decisions.svg" alt="The Decisions tab: standing decisions, one marked as conflicting with a team decision, then replaced ones and the team's shared decisions, with who made each one and when" width="720">
 </p>
 
 Every decision of the session, split into **Standing**, **Replaced**, **Shared with the team** and **From earlier sessions**, with who made it, when, the reason and what was passed over. A decision that contradicts one still in force is marked `≠ conflicts with "…"`, and the tab shows how many are open. Type in the filter to narrow them. Click a decision and `Revisit "<decision>": ` lands in your prompt, ready for you to push back.
@@ -58,11 +64,11 @@ Each file changed this session, with how often and when it was last touched, and
 ## How decisions get in
 
 <p align="center">
-  <img src="docs/flow.svg" alt="Claude's choices, your answers and plan approvals, and /decide all feed the Trail pane; decisions are saved per project and given back to Claude in the next session" width="700">
+  <img src="docs/flow.svg" alt="Claude's choices, your answers and plan approvals, and /decide all feed the Trail pane. Decisions are saved per project for your next session, and /trail share puts them in .claude/decisions.md for the team; both reach Claude's instructions, where each new decision is checked against them" width="700">
 </p>
 
 - **Claude's own.** Trail gives Claude a `decide` tool and a short instruction: log a non-obvious choice (an approach, a library, a scope cut, an assumption) at the moment it's made, with the reason and what it passed over. When a choice changes an earlier one, Claude names it and the old one is struck through as replaced.
-- **Yours.** Answers to Claude's multiple-choice questions and plan approvals are logged as yours automatically. Anything else, log it yourself:
+- **Yours.** Answers to Claude's multiple-choice questions and plan approvals are logged as yours automatically (plan approvals only for the session). Anything else, log it yourself:
 
   ```text
   /decide use SQLite because it's one user and no server
@@ -76,7 +82,7 @@ Reads and read-only commands never show up: they're most of the tool calls and c
 
 Each decision Claude logs (without `replaces`), and each of your `/decide`s, is checked against the ones still in force: this session's, your earlier sessions' and the team's. A small model (Haiku) answers one question: can both hold at once? "Redis for sessions" against "Postgres for sessions" can't; "Session TTL of 7 days" against "Redis with a 7-day TTL" can.
 
-When they can't, the new decision is logged anyway and marked `≠` in the pane, and Claude is told which decision it goes against and who made it, so it asks you before acting on it. If you meant the change, Claude logs it again with `replaces`, the old one is struck through, and the mark clears.
+When they can't, the new decision is logged anyway and marked `≠` in the pane, a warning line appears under your prompt even when the pane is closed, and Claude is told which decision it goes against and who made it, so it asks you before acting on it. If you meant the change, Claude logs it again with `replaces`, the old one is struck through, and the mark clears.
 
 ## Share decisions with your team
 
