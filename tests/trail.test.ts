@@ -6,16 +6,25 @@ const CWD = '/proj'
 const COMPOSER = { kind: 'composer' } as const
 const PRESENTATION = { isFullscreen: true, columns: 160 }
 
+// The status line as the plugin last set it.
+const shown: { status?: string } = {}
+
 function world(on: On, store: Record<string, unknown> = {}) {
+  shown.status = undefined
   const time = mock.clock(on, { now: Date.UTC(2026, 9, 19, 12, 0) })
   mock.store(on, store)
   on('session.start', () => ({ cwd: CWD }))
   on('session.cwd', () => ({ value: CWD }))
+  on('session.root', () => ({ value: CWD }))
   on('session.id', () => ({ value: 'S1' }))
   on('tool.register', ($, e) => ({ value: { tool: `mcp__trail__${e.name}` } }))
   on('command.register', ($, e) => ({ value: { command: e.name } }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
-  on('ui.status', () => ({ value: undefined }))
+  on('ui.status', ($, e) => {
+    shown.status = e.text
+
+    return { value: undefined }
+  })
   on('ui.toast', () => ({ value: undefined }))
   on('prompt.submit', ($, e) => ({ text: e.text }))
   on('tool.call', ($, e) => ({ result: { ok: true }, text: `${e.tool} ran` }))
@@ -219,11 +228,11 @@ test('the top line shows what is running right now, and the group its time', asy
   let release!: () => void
   const atBottom = new Promise<void>(resolve => (reached = resolve))
   const gate = new Promise<void>(resolve => (release = resolve))
-  on('tool.call', { tool: 'mcp__notes__search' }, async () => {
+  on('tool.call', { tool: 'WebSearch' }, async ($, e) => {
     reached()
     await gate
 
-    return { result: 'ok', text: 'ok' }
+    return { result: { query: e.query, results: [], durationSeconds: 1 }, text: 'ok' }
   })
   world(on)
   await start($)
@@ -232,10 +241,10 @@ test('the top line shows what is running right now, and the group its time', asy
 
   await $.prompt.submit({ text: 'find my notes', origin: COMPOSER, wait: false })
   await $.turn.start({ text: 'find my notes', turnId: 't1' })
-  const searching = $.tool.call({ tool: 'mcp__notes__search', query: 'x' })
+  const searching = $.tool.call({ tool: 'WebSearch', query: 'notes', mode: 'standard' })
   await atBottom
   expect(await ui.find({ text: /Working 0:00/ })).toBeDefined()
-  expect(await ui.find({ text: /notes: search/ })).toBeDefined()
+  expect(await ui.find({ text: /Searching the web: notes/ })).toBeDefined()
   expect(await ui.find({ text: /^ working$/ })).toBeDefined()
 
   release()
@@ -360,22 +369,23 @@ test("a background agent's calls outlive the main turn's end", async ($, on) => 
   let release!: () => void
   const atBottom = new Promise<void>(resolve => (reached = resolve))
   const gate = new Promise<void>(resolve => (release = resolve))
-  on('tool.call', { tool: 'mcp__notes__search' }, async () => {
+  on('tool.call', { tool: 'WebSearch' }, async ($, e) => {
     reached()
     await gate
 
-    return { result: 'ok', text: 'ok' }
+    return { result: { query: e.query, results: [], durationSeconds: 1 }, text: 'ok' }
   })
   world(on)
   await start($)
   await $.turn.start({ text: 'go', turnId: 't1' })
-  const searching = $.tool.call({ tool: 'mcp__notes__search', agentId: 'bg1' })
+  // A subagent's call: the engine sets agentId, so the input type leaves it out.
+  const searching = $.tool.call({ tool: 'WebSearch', query: 'notes', mode: 'standard', ...({ agentId: 'bg1' } as {}) })
   await atBottom
   await $.turn.complete({ answer: '', durationMs: 1000, isAborted: false, turnId: 't1', reason: 'answer' })
 
   const ui = await $.ui.mount(pane('terminal'))
   expect(await ui.find({ text: /Background/ })).toBeDefined()
-  expect(await ui.find({ text: /notes: search \(subagent\)/ })).toBeDefined()
+  expect(await ui.find({ text: /Searching the web: notes \(subagent\)/ })).toBeDefined()
   release()
   await searching
   expect(await ui.find({ text: /Idle/ })).toBeDefined()
@@ -460,4 +470,201 @@ test('wide characters wrap by the cells they take', async ($, on) => {
   expect(await ui.find({ type: 'Text', text: /^漢{10}$/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /^漢{11,}/ })).toBeUndefined()
   expect(await ui.find({ type: 'Text', text: /👋🏽 done/ })).toBeDefined()
+})
+
+const USAGE = { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
+const SHARED = `${CWD}/.claude/decisions.md`
+
+// The shared file as the test's disk holds it; a write replaces it.
+function disk(on: On, files: Record<string, string>) {
+  on('fs.read', ($, e) => {
+    const text = files[e.path]
+    if (text === undefined) throw new Error(`ENOENT: ${e.path}`)
+
+    return { value: text }
+  })
+  on('fs.write', ($, e) => {
+    files[e.path] = e.text
+
+    return { value: undefined }
+  })
+  on('process.run', () => ({
+    value: { exitCode: 0, stdout: 'Ada\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false },
+  }))
+
+  return files
+}
+
+// The conflict check's model: for a new decision named in `pairs`, answers
+// with the number of the settled one it names, else 0.
+function judge(on: On, pairs: Record<string, string> = {}) {
+  const asked: string[] = []
+  on('model.complete', ($, e) => {
+    const prompt = e.prompt
+    asked.push(prompt)
+    const fresh = Object.keys(pairs).find(text => prompt.includes(`New decision: ${text}`))
+    const settled = fresh !== undefined ? pairs[fresh]! : undefined
+    const line = prompt.split('\n').find(one => settled !== undefined && /^\d+\. /.test(one) && one.includes(settled))
+
+    return { value: { isAnswered: true, text: line !== undefined ? line.split('.')[0]! : '0', usage: USAGE } }
+  })
+
+  return asked
+}
+
+test('the team file reaches the prompt and the ledger, and decisions replace its lines', async ($, on) => {
+  disk(on, {
+    [SHARED]: '# Decisions\n\n- **pnpm, not npm** — One lockfile. _(Sam, 2026-10-02)_\n- Rate limits live in the gateway\n',
+  })
+  judge(on)
+  world(on)
+  on('prompt.compose', () => ({ sections: [] }))
+  await start($)
+  const base = { model: 'm', promptModel: 'm', surfaces: [], outputStyle: null, traits: [] }
+  const composed = await $.prompt.compose({ ...base, tools: [DECIDE] })
+  const earlier = composed.sections.find(one => one.id === 'trail:earlier')?.text ?? ''
+  expect(earlier).toContain('Shared with the team in .claude/decisions.md')
+  expect(earlier).toContain('- pnpm, not npm — One lockfile. (Sam, 2026-10-02)')
+  expect(earlier).toContain('- Rate limits live in the gateway')
+
+  const ui = await $.ui.mount(pane('terminal'))
+  await ui.press({ key: 'tab-decisions' })
+  expect(await ui.find({ text: /Shared with the team/ })).toBeDefined()
+  expect(await ui.find({ text: /^Sam$/ })).toBeDefined()
+
+  const out = await $.tool.call({ tool: DECIDE, what: 'yarn, not pnpm', why: 'w', by: 'user', replaces: 'pnpm, not npm' })
+  expect(out.result).toBe('Logged: yarn, not pnpm (replaces: pnpm, not npm)')
+  expect(await ui.find({ text: /Share takes it out/ })).toBeDefined()
+})
+
+test('share appends standing decisions, takes out replaced ones and keeps hand edits', async ($, on) => {
+  const files = disk(on, {
+    [SHARED]: '# Decisions\n\nOur own intro.\n\n- **pnpm, not npm** _(Sam, 2026-10-02)_\n- Written by hand\n',
+  })
+  judge(on)
+  world(on, {
+    'past:/proj': [
+      { session: 'S0', at: Date.UTC(2026, 9, 18, 9, 0), by: 'claude', text: 'Postgres for sessions', why: 'Already running.' },
+      { session: 'S0', at: Date.UTC(2026, 9, 18, 9, 5), by: 'user', text: 'Approved the plan' },
+    ],
+  })
+  await start($)
+  await $.tool.call({ tool: DECIDE, what: 'Bun, not pnpm', why: 'Faster installs.', by: 'user', replaces: 'pnpm, not npm' })
+  await $.command.run({ command: 'decide', args: 'tabs in Go files', origin: COMPOSER, presentation: PRESENTATION })
+
+  const ui = await $.ui.mount(pane('terminal'))
+  expect(await ui.find({ key: 'share', text: /Share 4/ })).toBeDefined()
+  const out = await $.command.run({ command: 'trail', args: 'share', origin: COMPOSER, presentation: PRESENTATION })
+  expect(out.text).toBe('.claude/decisions.md: added 3 decisions, took out 1 replaced. Commit it to share with your team.')
+  const lines = files[SHARED]!.split('\n')
+  expect(lines.slice(0, 5)).toEqual(['# Decisions', '', 'Our own intro.', '', '- Written by hand'])
+  expect(lines).toContain('- **Postgres for sessions** — Already running. _(Claude, 2026-10-18)_')
+  expect(lines).toContain('- **Bun, not pnpm** — Faster installs. _(Ada, 2026-10-19)_')
+  expect(lines).toContain('- **tabs in Go files** _(Ada, 2026-10-19)_')
+  expect(files[SHARED]).not.toContain('Approved the plan')
+  expect(files[SHARED]).not.toContain('pnpm, not npm')
+  expect(await ui.find({ key: 'share', text: /Share \d/ })).toBeUndefined()
+
+  const again = await $.command.run({ command: 'trail', args: 'share', origin: COMPOSER, presentation: PRESENTATION })
+  expect(again.text).toBe('Nothing new to share in .claude/decisions.md.')
+})
+
+test('a first share writes the file with its header', async ($, on) => {
+  const files = disk(on, {})
+  judge(on)
+  world(on)
+  await start($)
+  await $.tool.call({ tool: DECIDE, what: 'SQLite for the cache', why: 'One user.', by: 'claude' })
+  await $.command.run({ command: 'trail', args: 'share', origin: COMPOSER, presentation: PRESENTATION })
+  expect(files[SHARED]).toMatch(/^# Decisions\n\nWhat this project has settled[^\n]*\n\n- \*\*SQLite for the cache\*\* — One user\. _\(Claude, 2026-10-19\)_\n$/)
+})
+
+test('a decision that contradicts a standing one is flagged, held back and settled by replaces', async ($, on) => {
+  const files = disk(on, {})
+  const asked = judge(on, { 'Redis for sessions': 'Postgres for sessions' })
+  world(on)
+  await start($)
+  await $.tool.call({ tool: DECIDE, what: 'Postgres for sessions', why: 'Already running.', by: 'user' })
+  await $.tool.call({ tool: DECIDE, what: 'Tabs', why: 'w', by: 'claude' })
+  const out = await $.tool.call({ tool: DECIDE, what: 'Redis for sessions', why: 'Built-in expiry.', by: 'claude' })
+  expect(out.result).toContain('Logged: Redis for sessions. It appears to contradict "Postgres for sessions", a decision the person made.')
+  expect(out.result).toContain('replaces "Postgres for sessions"')
+  expect(asked[asked.length - 1]).toContain('New decision: Redis for sessions (Built-in expiry.)')
+  expect(shown.status).toBe('1 decision contradicts a standing one (Decisions tab)')
+
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount(pane(surface))
+    expect(await ui.find({ text: /≠ conflicts with "Postgres for sessions"/ })).toBeDefined()
+    expect(await ui.find({ key: 'tab-decisions', text: /≠1/ })).toBeDefined()
+    await ui.unmount()
+  }
+
+  const shared = await $.command.run({ command: 'trail', args: 'share', origin: COMPOSER, presentation: PRESENTATION })
+  expect(shared.text).toContain('1 decision left out until its conflict is settled.')
+  expect(files[SHARED]).not.toContain('Redis')
+
+  const settled = await $.tool.call({ tool: DECIDE, what: 'Redis for sessions', why: 'w', by: 'user', replaces: 'Postgres for sessions' })
+  expect(settled.result).toBe('Logged: Redis for sessions (replaces: Postgres for sessions)')
+  expect(shown.status).toBeUndefined()
+  const ui = await $.ui.mount(pane('terminal'))
+  expect(await ui.find({ text: /≠/ })).toBeUndefined()
+  expect(await ui.find({ text: /replaced by Redis for sessions/ })).toBeDefined()
+  expect(await ui.find({ key: 'tab-decisions', text: /Decisions 2$/ })).toBeDefined()
+
+  await $.command.run({ command: 'trail', args: 'share', origin: COMPOSER, presentation: PRESENTATION })
+  expect(files[SHARED]).toContain('**Redis for sessions**')
+  expect(files[SHARED]).not.toContain('Postgres')
+})
+
+test('no conflict, or no answer from the model, leaves a decision unflagged', async ($, on) => {
+  let calls = 0
+  on('model.complete', () => {
+    calls += 1
+    if (calls === 1) return { value: { isAnswered: true, text: '0', usage: USAGE } }
+    throw new Error('overloaded')
+  })
+  world(on)
+  await start($)
+  const first = await $.tool.call({ tool: DECIDE, what: 'Lone decision', why: 'w', by: 'claude' })
+  expect(first.result).toBe('Logged: Lone decision')
+  expect(calls).toBe(0)
+  await $.tool.call({ tool: DECIDE, what: 'Second', why: 'w', by: 'claude' })
+  const third = await $.tool.call({ tool: DECIDE, what: 'Third', why: 'w', by: 'claude' })
+  expect(third.result).toBe('Logged: Third')
+  expect(calls).toBe(2)
+  const ui = await $.ui.mount(pane('terminal'))
+  expect(await ui.find({ text: /≠/ })).toBeUndefined()
+})
+
+test('/decide says when your decision contradicts a standing one', async ($, on) => {
+  judge(on, { 'GraphQL for the API': 'Claude picked REST' })
+  world(on)
+  await start($)
+  await $.tool.call({ tool: DECIDE, what: 'Claude picked REST', why: 'w', by: 'claude' })
+  const out = await $.command.run({ command: 'decide', args: 'GraphQL for the API', origin: COMPOSER, presentation: PRESENTATION })
+  expect(out.text).toBe('Logged your decision: GraphQL for the API. It looks like it contradicts "Claude picked REST".')
+  expect(out.context?.[0]).toContain('replaces "Claude picked REST"')
+})
+
+test('hand-written team lines read back whole', async ($, on) => {
+  disk(on, {
+    [SHARED]: [
+      '- **Ship on Fridays** — fewer hotfixes _(Sam (lead), 2026-10-01)_',
+      '- Use  Postgres – the app runs one',
+      '- Plain hyphen - also a reason',
+      '',
+    ].join('\n'),
+  })
+  judge(on)
+  world(on)
+  on('prompt.compose', () => ({ sections: [] }))
+  await start($)
+  const base = { model: 'm', promptModel: 'm', surfaces: [], outputStyle: null, traits: [] }
+  const earlier = (await $.prompt.compose({ ...base, tools: [DECIDE] })).sections.find(one => one.id === 'trail:earlier')?.text ?? ''
+  expect(earlier).toContain('- Ship on Fridays — fewer hotfixes (Sam (lead), 2026-10-01)')
+  expect(earlier).toContain('- Use  Postgres — the app runs one')
+  expect(earlier).toContain('- Plain hyphen — also a reason')
+
+  const out = await $.tool.call({ tool: DECIDE, what: 'SQLite', why: 'w', by: 'user', replaces: 'use postgres' })
+  expect(out.result).toBe('Logged: SQLite (replaces: Use  Postgres)')
 })

@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { Color, EngineInterface, Register, RenderNode, ToolCallInput } from 'claude-code'
 
-import type { Entry, PastDecision, View } from '../types'
+import type { Entry, PastDecision, SharedDecision, View } from '../types'
 
 const PANE = 'trail'
 const TOOL = 'mcp__trail__decide'
@@ -9,6 +9,13 @@ const KEEP = 500
 const PAST_KEEP = 200
 const PAST_SHOWN = 15
 const REMEMBERED = 20
+// The team's decisions, in the project and under git.
+const SHARED_FILE = '.claude/decisions.md'
+const SHARED_SHOWN = 50
+// How many standing decisions a new one is checked against.
+const CHECKED = 60
+// Logged for the session's record, never kept for later or shared.
+const PLAN = 'Approved the plan'
 // The newest turns start unfolded; a click flips any turn.
 const OPEN_TURNS = 2
 const STALE_MS = 30 * 60 * 1000
@@ -19,6 +26,7 @@ const folds = atom({ plugin: 'trail', key: 'folds' } as const, {})
 const search = atom({ plugin: 'trail', key: 'search' } as const, '')
 const turn = atom({ plugin: 'trail', key: 'turn' } as const, 0)
 const past = atom({ plugin: 'trail', key: 'past' } as const, [])
+const shared = atom({ plugin: 'trail', key: 'shared' } as const, [])
 const live = atom({ plugin: 'trail', key: 'live' } as const, {
   startedAt: null,
   now: 0,
@@ -33,12 +41,29 @@ The person follows this session in a trail pane: their asks, the decisions made,
 - Skip routine steps (reading files, running a build, fixing a typo). One call per decision, and no need to mention the logging in your reply.
 - what: the choice itself, under 80 characters ("SQLite over Postgres for the cache"). why: one short sentence.`
 
+const CHECK = `You compare a new decision with the decisions a software project has already settled.
+Two decisions conflict when both cannot hold at once: following one means going against the other ("Postgres for sessions" and "Redis for sessions"; "No new dependencies" and "Add lodash").
+Decisions about different things do not conflict, and neither does one that narrows, extends or applies another.
+Answer with the number of the settled decision the new one conflicts with, or 0 when it conflicts with none. The number alone.`
+
+const SHARED_HEADER = `# Decisions
+
+What this project has settled, one per line. Claude reads this list at the start of every session through [Trail](https://github.com/m3talen/claude-trail), and \`/trail share\` adds a session's decisions. Edit it like any other file.`
+
 type Decision = {
   by: 'user' | 'claude'
   text: string
   why?: string
   alternatives?: string
   isSubagent?: boolean
+  replaces?: string
+}
+
+// A decision still in force, whoever made it and wherever it is kept.
+type Standing = {
+  text: string
+  why?: string
+  who: 'user' | 'claude' | 'team'
 }
 
 // The trail's own commands, which answer without a model turn.
@@ -130,9 +155,9 @@ async function addEdit($: EngineInterface, path: string, isSubagent: boolean) {
   await refreshStatus($)
 }
 
-// The standing decisions, this session's and earlier ones', that `query`
-// names best: none, one text (recorded once or more), or several texts
-// named equally well.
+// The standing decisions, this session's, earlier ones' and the team's,
+// that `query` names best: none, one text (recorded once or more), or
+// several texts named equally well.
 async function named($: EngineInterface, query: string) {
   const session = await $.session.id()
   const own = (await read($, entries)).filter(
@@ -141,8 +166,13 @@ async function named($: EngineInterface, query: string) {
   const earlier = (await read($, past)).filter(
     one => one.session !== session && one.replacedBy === undefined,
   )
-  const scored = [...earlier, ...own]
-    .map(one => ({ id: 'turn' in one ? one.id : undefined, at: one.at, text: one.text, score: rank(one.text, query) }))
+  const team = (await read($, shared)).filter(one => one.replacedBy === undefined)
+  const scored = [
+    ...team.map(one => ({ id: undefined, at: 0, text: one.text })),
+    ...earlier.map(one => ({ id: undefined, at: one.at, text: one.text })),
+    ...own.map(one => ({ id: one.id, at: one.at, text: one.text })),
+  ]
+    .map(one => ({ ...one, score: rank(one.text, query) }))
     .filter(one => one.score > 0)
   const best = Math.max(0, ...scored.map(one => one.score))
 
@@ -160,11 +190,15 @@ async function markReplaced(
   const mark = (one: PastDecision) =>
     chosen.some(c => c.at === one.at && c.text === one.text) ? { ...one, replacedBy: by } : one
   await update($, past, list => list.map(mark))
+  await update($, shared, list =>
+    list.map(one => (chosen.some(c => same(c.text, one.text)) ? { ...one, replacedBy: by } : one)),
+  )
   await changeStored($, list => list.map(mark)).catch(() => undefined)
 }
 
 async function logDecision($: EngineInterface, decision: Decision) {
-  const entry = await add($, { kind: 'decision', ...decision })
+  const { replaces, ...shown } = decision
+  const entry = await add($, { kind: 'decision', ...shown })
   const kept: PastDecision = {
     id: entry.id,
     session: await $.session.id(),
@@ -172,15 +206,191 @@ async function logDecision($: EngineInterface, decision: Decision) {
     by: decision.by,
     text: decision.text,
     why: decision.why,
+    ...(replaces !== undefined ? { replaces } : {}),
   }
   // Best effort: the pane already holds the decision, so a failed write
   // must not read as a failed log.
   await changeStored($, list => [...list, kept].slice(-PAST_KEEP)).catch(() => undefined)
+
+  return entry
+}
+
+async function storedPast($: EngineInterface) {
+  const stored = await $.store.get(await pastKey($))
+
+  return Array.isArray(stored) ? (stored as PastDecision[]) : []
 }
 
 async function loadPast($: EngineInterface) {
-  const stored = await $.store.get(await pastKey($))
-  await update($, past, () => (Array.isArray(stored) ? (stored as PastDecision[]) : []))
+  const stored = await storedPast($)
+  await update($, past, () => stored)
+}
+
+async function sharedPath($: EngineInterface) {
+  return `${await $.session.root()}/${SHARED_FILE}`
+}
+
+// The shared file's text, or '' while there is none.
+async function readShared($: EngineInterface) {
+  try {
+    const text = await $.fs.read(await sharedPath($))
+
+    return typeof text === 'string' ? text : ''
+  } catch {
+    return ''
+  }
+}
+
+// The shared file's decisions, each marked when a decision here replaced it
+// since. Read again before each prompt, so a pull mid-session shows.
+async function loadShared($: EngineInterface) {
+  const gone = replacements(await storedPast($))
+  const list = parseShared(await readShared($)).map(one => {
+    const by = gone.get(fold(one.text))
+
+    return by !== undefined ? { ...one, replacedBy: by } : one
+  })
+  const before = await read($, shared)
+  if (JSON.stringify(before) !== JSON.stringify(list)) {
+    await update($, shared, () => list)
+    await refreshStatus($)
+  }
+}
+
+// Every decision still in force, each text once and newest last: the
+// team's, then earlier sessions', then this session's.
+async function standingDecisions($: EngineInterface, except: string) {
+  const session = await $.session.id()
+  const team: Standing[] = (await read($, shared))
+    .filter(one => one.replacedBy === undefined)
+    .map(one => ({ text: one.text, why: one.why, who: 'team' }))
+  const earlier: Standing[] = (await read($, past))
+    .filter(one => one.session !== session && one.replacedBy === undefined)
+    .map(one => ({ text: one.text, why: one.why, who: one.by }))
+  const own: Standing[] = (await read($, entries))
+    .filter(one => one.kind === 'decision' && one.replacedBy === undefined)
+    .map(one => ({ text: one.text, why: one.why, who: one.by }))
+  const seen = new Set([fold(except), fold(PLAN)])
+  const newestFirst: Standing[] = []
+  for (const one of [...team, ...earlier, ...own].reverse()) {
+    if (seen.has(fold(one.text))) continue
+    seen.add(fold(one.text))
+    newestFirst.push(one)
+  }
+
+  return newestFirst.slice(0, CHECKED).reverse()
+}
+
+// The standing decision a new one contradicts, by a small model's judgment,
+// or undefined when none does or the check could not run.
+async function findConflict($: EngineInterface, text: string, why: string | undefined) {
+  const standing = await standingDecisions($, text)
+  if (standing.length === 0) return undefined
+  const line = (one: { text: string; why?: string }) =>
+    `${one.text}${one.why !== undefined ? ` (${one.why})` : ''}`
+  const reply = await $.model.complete({
+    model: 'haiku',
+    system: CHECK,
+    prompt: `Settled decisions:\n${standing.map((one, i) => `${i + 1}. ${line(one)}`).join('\n')}\n\nNew decision: ${line({ text, why })}`,
+    maxTokens: 16,
+    effort: 'low',
+    timeoutMs: 15000,
+  })
+  if (!reply.isAnswered) return undefined
+  const n = Number(/\d+/.exec(reply.text)?.[0] ?? 0)
+
+  return n >= 1 && n <= standing.length ? standing[n - 1] : undefined
+}
+
+// Checks a decision just logged, and marks it with what it contradicts.
+async function checkConflict($: EngineInterface, id: string, text: string, why: string | undefined) {
+  const conflict = await findConflict($, text, why).catch(() => undefined)
+  if (conflict === undefined) return undefined
+  await patch($, id, { conflictsWith: conflict.text })
+  await changeStored($, list =>
+    list.map(one => (one.id === id ? { ...one, conflictsWith: conflict.text } : one)),
+  ).catch(() => undefined)
+  await refreshStatus($)
+
+  return conflict
+}
+
+// What Claude is told when a decision it logged contradicts a standing one.
+function conflictNote(conflict: Standing, what: string) {
+  const whose =
+    conflict.who === 'team'
+      ? `a team decision in ${SHARED_FILE}`
+      : conflict.who === 'user'
+        ? 'a decision the person made'
+        : 'an earlier decision of yours'
+
+  return `It appears to contradict "${conflict.text}", ${whose}. If it is meant to change that one, check with the person, then call ${TOOL} again with what "${what}" and replaces "${conflict.text}". If the two can both hold, carry on.`
+}
+
+async function gitName($: EngineInterface) {
+  try {
+    const ran = await $.process.run(['git', 'config', 'user.name'], { timeoutMs: 5000 })
+    const name = ran.stdout.trim()
+
+    return ran.exitCode === 0 && name !== '' ? name : undefined
+  } catch {
+    return undefined
+  }
+}
+
+// Writes the project's standing decisions into the shared file: the new
+// ones appended, the replaced ones taken out, every other line as it was.
+// Decisions in an open conflict wait until it is settled.
+async function shareDecisions($: EngineInterface) {
+  if ((await read($, entries)).some(one => one.id.startsWith('demo-'))) {
+    return { isDemo: true, added: 0, removed: 0, held: 0 }
+  }
+  const before = await readShared($)
+  const stored = await storedPast($)
+  const gone = replacements(stored)
+  for (const one of await read($, shared)) {
+    if (one.replacedBy !== undefined) gone.set(fold(one.text), one.replacedBy)
+  }
+  const team = parseShared(before).map(one => {
+    const by = gone.get(fold(one.text))
+
+    return by !== undefined ? { ...one, replacedBy: by } : one
+  })
+  let removed = 0
+  const kept = (before === '' ? SHARED_HEADER.split('\n') : before.replace(/\n+$/, '').split('\n')).filter(
+    line => {
+      const one = parseLine(line)
+      if (one === undefined || !gone.has(fold(one.text))) return true
+      removed += 1
+
+      return false
+    },
+  )
+  const plan = shareable(stored, team)
+  const name = await gitName($)
+  const added = plan.added.map(one => sharedLine(one, name))
+  if (added.length > 0 || removed > 0) {
+    const gap = added.length > 0 && parseLine(kept[kept.length - 1] ?? '') === undefined ? [''] : []
+    await $.fs.write(await sharedPath($), [...kept, ...gap, ...added].join('\n') + '\n')
+    await loadShared($)
+  }
+
+  return { isDemo: false, added: added.length, removed, held: plan.held }
+}
+
+function shareMessage(shared: { isDemo: boolean; added: number; removed: number; held: number }) {
+  if (shared.isDemo) return 'Sample data is never shared.'
+  const held =
+    shared.held > 0
+      ? ` ${plural(shared.held, 'decision')} left out until ${shared.held === 1 ? 'its conflict is' : 'their conflicts are'} settled.`
+      : ''
+  if (shared.added + shared.removed === 0) return `Nothing new to share in ${SHARED_FILE}.${held}`
+  const parts = [
+    shared.added > 0 ? `added ${plural(shared.added, 'decision')}` : '',
+    shared.removed > 0 ? `took out ${shared.removed} replaced` : '',
+  ].filter(part => part !== '')
+
+  return `${SHARED_FILE}: ${parts.join(', ')}. Commit it to share with your team.${held}`
 }
 
 async function resetSession($: EngineInterface) {
@@ -193,12 +403,16 @@ async function resetSession($: EngineInterface) {
   await refreshStatus($)
 }
 
+// The line under the prompt, which Claude Code draws as a warning: kept for
+// open conflicts alone, as the pane's tabs carry the counts.
 async function refreshStatus($: EngineInterface) {
-  const list = await read($, entries)
-  const decisions = list.filter(one => one.kind === 'decision').length
-  const files = new Set(list.filter(one => one.kind === 'edit').map(one => one.text)).size
+  const n = openConflicts(await read($, entries), await read($, past), await read($, shared)).size
   $.ui.status(
-    decisions + files === 0 ? undefined : `${decisions} decisions · ${files} files`,
+    n === 0
+      ? undefined
+      : n === 1
+        ? '1 decision contradicts a standing one (Decisions tab)'
+        : `${n} decisions contradict standing ones (Decisions tab)`,
   )
 }
 
@@ -246,22 +460,44 @@ async function describeCall($: EngineInterface, e: ToolCallInput) {
 
 async function remembered($: EngineInterface) {
   const session = await $.session.id()
+  const team = (await read($, shared)).filter(one => one.replacedBy === undefined)
+  const inTeam = new Set(team.map(one => fold(one.text)))
   const standing = (await read($, past))
-    .filter(one => one.session !== session && one.replacedBy === undefined)
+    .filter(
+      one =>
+        one.session !== session &&
+        one.replacedBy === undefined &&
+        !same(one.text, PLAN) &&
+        !inTeam.has(fold(one.text)),
+    )
     .slice(-REMEMBERED)
-  if (standing.length === 0) return undefined
-  const lines = standing.map(one => {
-    const who = one.by === 'user' ? 'the person' : 'Claude'
-    const why = one.why !== undefined ? ` — ${one.why}` : ''
-
-    return `- [${clock(one.at, true)}] ${one.text} (${who})${why}`
-  })
-
-  return [
+  if (standing.length === 0 && team.length === 0) return undefined
+  const parts = [
     '# Decisions already made in this project',
-    'Recorded in earlier sessions, oldest first. Treat them as settled unless the person says otherwise.',
-    ...lines,
-  ].join('\n')
+    'Treat them as settled unless the person says otherwise.',
+  ]
+  if (team.length > 0) {
+    const shown = team.slice(-SHARED_SHOWN)
+    parts.push('', `Shared with the team in ${SHARED_FILE}:`)
+    for (const one of shown) {
+      const why = one.why !== undefined ? ` — ${one.why}` : ''
+      const meta = [one.who, one.on].filter(part => part !== undefined).join(', ')
+      parts.push(`- ${one.text}${why}${meta !== '' ? ` (${meta})` : ''}`)
+    }
+    if (team.length > shown.length) {
+      parts.push(`- …and ${team.length - shown.length} older ones in ${SHARED_FILE}.`)
+    }
+  }
+  if (standing.length > 0) {
+    parts.push('', "From the person's earlier sessions here, oldest first:")
+    for (const one of standing) {
+      const who = one.by === 'user' ? 'the person' : 'Claude'
+      const why = one.why !== undefined ? ` — ${one.why}` : ''
+      parts.push(`- [${clock(one.at, true)}] ${one.text} (${who})${why}`)
+    }
+  }
+
+  return parts.join('\n')
 }
 
 async function setFold($: EngineInterface, n: number, isOpen: boolean) {
@@ -305,8 +541,13 @@ async function seedDemo($: EngineInterface) {
     entry(3, 12, { kind: 'skill', by: 'claude', text: 'code-review' }),
     entry(4, 2, { kind: 'ask', by: 'user', text: 'Rate-limit the magic link endpoint and email me a summary' }),
     entry(4, 2, { kind: 'decision', by: 'user', text: 'Email: Summary only', why: 'How much detail should the email have?' }),
-    entry(4, 1, { kind: 'decision', by: 'claude', text: '5 requests per minute per email address', why: 'Stops abuse without hurting retries.', alternatives: 'per IP' }),
+    entry(4, 1, { kind: 'decision', by: 'claude', text: '5 requests per minute per email, in app middleware', why: 'Stops abuse without hurting retries.', alternatives: 'per IP', conflictsWith: 'Rate limits live in the API gateway' }),
     entry(4, 1, { kind: 'edit', by: 'claude', text: 'src/routes/login.tsx', count: 1 }),
+  ])
+  await update($, shared, () => [
+    { text: 'pnpm, not npm', why: 'One lockfile across the monorepo.', who: 'Sam', on: '2026-09-28' },
+    { text: 'Rate limits live in the API gateway', why: 'One place to tune them.', who: 'Sam', on: '2026-10-06' },
+    { text: 'All timestamps stored in UTC', who: 'Claude', on: '2026-10-14' },
   ])
   await update($, turn, () => 4)
   await update($, live, () => ({
@@ -374,8 +615,8 @@ export const register: Register = on => {
     })
     await $.command.register({
       name: 'trail',
-      description: 'Open the decision trail pane (or: export, clear, forget)',
-      argumentHint: '[export|clear|forget]',
+      description: 'Open the decision trail pane (or: share, export, clear, forget)',
+      argumentHint: '[share|export|clear|forget]',
     })
     await $.command.register({
       name: 'decide',
@@ -383,6 +624,7 @@ export const register: Register = on => {
       argumentHint: '<what> [because <why>]',
     })
     await loadPast($)
+    await loadShared($).catch(() => undefined)
     await refreshStatus($)
     // A reload leaves no hook to pop the calls it caught in flight.
     await update($, live, l => ({ ...l, inflight: [] }))
@@ -400,6 +642,7 @@ export const register: Register = on => {
     if (e.reason === 'clear') {
       await resetSession($)
       await loadPast($)
+      await loadShared($).catch(() => undefined)
     }
 
     return next(e)
@@ -421,6 +664,7 @@ export const register: Register = on => {
 
   on('prompt.submit', async ($, e, next) => {
     if (e.isMeta === true) return next(e)
+    await loadShared($).catch(() => undefined)
     if (e.command !== undefined) {
       pendingCommand = OWN_COMMANDS.has(e.command.name)
         ? undefined
@@ -496,7 +740,7 @@ export const register: Register = on => {
     const what = typeof e.what === 'string' ? clip(e.what, 160) : ''
     if (what === '') return { result: 'Not logged: `what` is empty.' }
     const query = typeof e.replaces === 'string' ? e.replaces.trim() : ''
-    const candidates = query !== '' ? await named($, query) : []
+    const candidates = query !== '' ? (await named($, query)).filter(one => !same(one.text, what)) : []
     const texts = [...new Set(candidates.map(one => one.text))]
     if (texts.length > 1) {
       return {
@@ -504,23 +748,41 @@ export const register: Register = on => {
       }
     }
     const replaced = texts[0]
+    const unmatched = query !== '' && replaced === undefined ? ` No standing decision matched "${query}", so none was marked replaced.` : ''
+    // The same decision again is logged once; a replaces given now settles
+    // the conflict flagged on it.
+    const again = (await read($, entries)).find(
+      one => one.kind === 'decision' && one.replacedBy === undefined && same(one.text, what),
+    )
+    if (again !== undefined) {
+      if (replaced === undefined) return { result: `Already logged: ${again.text}.${unmatched}` }
+      await markReplaced($, candidates, again.text)
+      await patch($, again.id, { conflictsWith: undefined })
+      await changeStored($, list =>
+        list.map(one => (one.id === again.id ? { ...one, replaces: replaced, conflictsWith: undefined } : one)),
+      ).catch(() => undefined)
+      await refreshStatus($)
+
+      return { result: `Logged: ${again.text} (replaces: ${replaced})` }
+    }
     if (replaced !== undefined) await markReplaced($, candidates, what)
-    await logDecision($, {
+    const why = typeof e.why === 'string' && e.why.trim() !== '' ? clip(e.why, 300) : undefined
+    const entry = await logDecision($, {
       by: e.by === 'user' ? 'user' : 'claude',
       text: what,
-      why: typeof e.why === 'string' && e.why.trim() !== '' ? clip(e.why, 300) : undefined,
+      why,
       alternatives:
         typeof e.alternatives === 'string' && e.alternatives.trim() !== ''
           ? clip(e.alternatives, 160)
           : undefined,
       isSubagent: e.agentId !== undefined,
+      replaces: replaced,
     })
     if (replaced !== undefined) return { result: `Logged: ${what} (replaces: ${replaced})` }
-    if (query !== '') {
-      return { result: `Logged: ${what}. No standing decision matched "${query}", so none was marked replaced.` }
-    }
+    const conflict = await checkConflict($, entry.id, what, why)
+    const note = conflict !== undefined ? ` ${conflictNote(conflict, what)}` : ''
 
-    return { result: `Logged: ${what}` }
+    return { result: `Logged: ${what}${unmatched !== '' || note !== '' ? '.' : ''}${unmatched}${note}` }
   }).catch(() => ({ result: 'Not logged: the trail failed to record it.' }))
 
   on('tool.call', { tool: 'Edit' }, async ($, e, next) => {
@@ -620,7 +882,7 @@ export const register: Register = on => {
     const ran = await next(e)
     // A teammate's plan awaiting its leader is not approved yet.
     if (ran.deny === undefined && ran.isError !== true && ran.result.awaitingLeaderApproval !== true) {
-      await logDecision($, { by: 'user', text: 'Approved the plan' })
+      await logDecision($, { by: 'user', text: PLAN })
     }
 
     return ran
@@ -631,11 +893,15 @@ export const register: Register = on => {
     if (arg === 'export') {
       return { text: `Trail saved to ${await exportTrail($)}` }
     }
+    if (arg === 'share') {
+      return { text: shareMessage(await shareDecisions($)) }
+    }
     if (arg === 'clear') {
       const session = await $.session.id()
       await resetSession($)
       await changeStored($, list => list.filter(one => one.session !== session))
       await loadPast($)
+      await loadShared($).catch(() => undefined)
 
       return { text: 'Trail cleared for this session.' }
     }
@@ -651,8 +917,11 @@ export const register: Register = on => {
     if (arg === 'forget') {
       await changeStored($, () => [])
       await update($, past, () => [])
+      await loadShared($).catch(() => undefined)
 
-      return { text: "Forgot this project's decisions from earlier sessions." }
+      return {
+        text: `Forgot this project's decisions from earlier sessions. The team's, in ${SHARED_FILE}, stay.`,
+      }
     }
     const opened = await $.ui.open({ id: PANE, title: 'Trail' })
 
@@ -664,14 +933,19 @@ export const register: Register = on => {
     const what = clip(found?.[1] ?? e.args, 160)
     const why = found?.[2] !== undefined ? clip(found[2], 300) : undefined
     if (what === '') return { text: 'Usage: /decide <what> [because <why>]' }
-    await logDecision($, { by: 'user', text: what, why })
-
-    return {
-      text: `Logged your decision: ${what}`,
-      context: [
-        `The person logged a decision in their trail: "${what}"${why !== undefined ? `, because ${why}` : ''}. Treat it as settled.`,
-      ],
+    const entry = await logDecision($, { by: 'user', text: what, why })
+    const conflict = await checkConflict($, entry.id, what, why)
+    const logged = `The person logged a decision in their trail: "${what}"${why !== undefined ? `, because ${why}` : ''}. Treat it as settled.`
+    if (conflict !== undefined) {
+      return {
+        text: `Logged your decision: ${what}. It looks like it contradicts "${conflict.text}".`,
+        context: [
+          `${logged} It appears to contradict the standing decision "${conflict.text}". Ask the person whether it replaces that one; if it does, call ${TOOL} with what "${what}", by "user" and replaces "${conflict.text}".`,
+        ],
+      }
     }
+
+    return { text: `Logged your decision: ${what}`, context: [logged] }
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
@@ -687,14 +961,24 @@ export const register: Register = on => {
     // A surface with no field to edit the filter shows every decision.
     const canFilter = e.surface !== 'mobile' && 'Input' in $.ui.resolve(e)
     const query = canFilter ? typed.trim().toLowerCase() : ''
-    // The store also holds this session's decisions, already shown above.
+    const team = await read($, shared)
+    const inTeam = new Set(team.map(one => fold(one.text)))
+    // The store also holds this session's decisions, already shown above,
+    // and the shared file's, shown as the team's.
     const shown = new Set(
       list.filter(one => one.kind === 'decision').map(one => `${one.at}|${one.text}`),
     )
-    const earlier = (await read($, past)).filter(one => !shown.has(`${one.at}|${one.text}`))
+    const kept = await read($, past)
+    const earlier = kept.filter(one => !shown.has(`${one.at}|${one.text}`) && !inTeam.has(fold(one.text)))
 
     const decisions = list.filter(one => one.kind === 'decision')
     const standing = decisions.filter(one => one.replacedBy === undefined)
+    const conflicted = openConflicts(list, kept, team)
+    // What a share would change: decisions not in the file yet, and the
+    // file's replaced ones to take out.
+    const toShare =
+      shareable([...kept, ...standing], team).added.length +
+      team.filter(one => one.replacedBy !== undefined).length
     const files = filesChanged(list)
     const isWorking = now.startedAt !== null
     const today = await $.clock.now()
@@ -759,7 +1043,7 @@ export const register: Register = on => {
     }
 
     // ── Tabs.
-    const tab = (key: View, label: string, hotkey: string, count?: number) => {
+    const tab = (key: View, label: string, hotkey: string, count?: number, alert?: number) => {
       const isActive = mode === key
 
       return (
@@ -772,9 +1056,13 @@ export const register: Register = on => {
             <Text>{label}</Text>
           )}
           {count !== undefined && count > 0 ? <Text dimColor> {count}</Text> : ''}
+          {alert !== undefined && alert > 0 ? <Text color="warning"> ≠{alert}</Text> : ''}
         </Button>
       )
     }
+
+    // The line under a decision that contradicts a standing one.
+    const conflictText = (one: Entry) => `≠ conflicts with "${one.conflictsWith ?? ''}"`
 
     // ── Timeline: each turn a run on the rail.
     const decisionLines = (one: Entry, first: string, rest: string, color: Color, width: number) => {
@@ -806,6 +1094,11 @@ export const register: Register = on => {
       const indent = ' '.repeat(2 + who.length)
       for (const line of more) {
         rows.push(railRow(rest, color, isReplaced ? <Text strikethrough dimColor>{indent + line}</Text> : indent + line))
+      }
+      if (conflicted.has(one.id)) {
+        for (const line of wrap(conflictText(one), width - 2)) {
+          rows.push(railRow(rest, color, <Text color="warning">{'  ' + line}</Text>))
+        }
       }
       const notes = isReplaced
         ? [`replaced by ${one.replacedBy ?? ''}`]
@@ -951,15 +1244,16 @@ export const register: Register = on => {
     const ledgerRow = (args: {
       key: string
       text: string
-      by: 'user' | 'claude'
-      at: number
+      who: string
+      whoColor: Color
+      date: string
       isReplaced: boolean
       notes: string[]
+      warning?: string
       isCompact?: boolean
     }) => {
-      const who = args.by === 'user' ? 'you' : 'Claude'
-      const meta = `${who} ${when(args.at, today)}`
-      const [head = '', ...more] = wrap(args.text, W - 3 - meta.length)
+      const meta = `${args.who} ${args.date}`
+      const [head = '', ...more] = wrap(args.text, W - 3 - cells(meta))
       const styled = (text: string) =>
         args.isReplaced ? (
           <Text strikethrough dimColor>
@@ -973,18 +1267,15 @@ export const register: Register = on => {
         <Box flexDirection="column" marginTop={args.isCompact === true ? 0 : 1}>
           <Box flexDirection="row" justifyContent="space-between">
             <Button key={args.key} plain onPress={() => revisit($, args.text)}>
-              <Text
-                color={args.isReplaced ? 'inactive' : args.by === 'user' ? 'suggestion' : 'claude'}
-                bold
-              >
+              <Text color={args.isReplaced ? 'inactive' : args.whoColor} bold>
                 {args.isReplaced ? '◇ ' : '◆ '}
               </Text>
               {styled(head)}
             </Button>
             <Text>
               {' '}
-              <Text color={args.by === 'user' ? 'suggestion' : 'claude'}>{who}</Text>
-              <Text dimColor> {when(args.at, today)}</Text>
+              <Text color={args.whoColor}>{args.who}</Text>
+              {args.date !== '' ? <Text dimColor> {args.date}</Text> : ''}
             </Text>
           </Box>
           {more.map(line => (
@@ -993,6 +1284,14 @@ export const register: Register = on => {
               {styled(line)}
             </Text>
           ))}
+          {wrap(args.warning ?? '', W - 2)
+            .filter(line => line !== '')
+            .map(line => (
+              <Text color="warning">
+                {'  '}
+                {line}
+              </Text>
+            ))}
           {args.notes
             .flatMap(note => wrap(note, W - 2))
             .map(line => (
@@ -1009,9 +1308,11 @@ export const register: Register = on => {
       ledgerRow({
         key: `ledger-${one.id}`,
         text: one.text,
-        by: one.by,
-        at: one.at,
+        who: one.by === 'user' ? 'you' : 'Claude',
+        whoColor: one.by === 'user' ? 'suggestion' : 'claude',
+        date: when(one.at, today),
         isReplaced: one.replacedBy !== undefined,
+        warning: conflicted.has(one.id) ? conflictText(one) : undefined,
         notes:
           one.replacedBy !== undefined
             ? [`replaced by ${one.replacedBy}`]
@@ -1052,8 +1353,9 @@ export const register: Register = on => {
         .reverse()
         .filter(one => hit(one.text, one.why))
         .slice(0, PAST_SHOWN)
+      const ours = [...team].reverse().filter(one => hit(one.text, one.why))
 
-      if (decisions.length === 0 && earlier.length === 0) {
+      if (decisions.length === 0 && earlier.length === 0 && team.length === 0) {
         return (
           <Box marginTop={1}>
             <Text dimColor wrap="wrap">
@@ -1070,19 +1372,37 @@ export const register: Register = on => {
           {mine.map(ledgerEntry)}
           {replaced.length > 0 ? section('Replaced', replaced.length) : ''}
           {replaced.map(ledgerEntry)}
+          {ours.length > 0 ? section('Shared with the team', ours.length) : ''}
+          {ours.map(one =>
+            ledgerRow({
+              key: `team-${fold(one.text)}`,
+              text: one.text,
+              who: one.who ?? 'team',
+              whoColor: one.who === 'Claude' ? 'claude' : 'suggestion',
+              date: one.on !== undefined ? day(one.on, today) : '',
+              isReplaced: one.replacedBy !== undefined,
+              notes:
+                one.replacedBy !== undefined
+                  ? [`replaced by ${one.replacedBy}; Share takes it out of ${SHARED_FILE}`]
+                  : one.why !== undefined
+                    ? [one.why]
+                    : [],
+            }),
+          )}
           {before.length > 0 ? section('From earlier sessions', before.length) : ''}
           {before.map((one, i) =>
             ledgerRow({
               key: `earlier-${one.id ?? `${one.at}-${i}`}`,
               text: one.text,
-              by: one.by,
-              at: one.at,
+              who: one.by === 'user' ? 'you' : 'Claude',
+              whoColor: one.by === 'user' ? 'suggestion' : 'claude',
+              date: when(one.at, today),
               isReplaced: one.replacedBy !== undefined,
               notes: one.replacedBy !== undefined ? [`replaced by ${one.replacedBy}`] : [],
               isCompact: i > 0,
             }),
           )}
-          {query !== '' && mine.length + replaced.length + before.length === 0 ? (
+          {query !== '' && mine.length + replaced.length + ours.length + before.length === 0 ? (
             <Box marginTop={1}>
               <Text dimColor>No decision mentions "{query}".</Text>
             </Box>
@@ -1138,7 +1458,7 @@ export const register: Register = on => {
       mode === 'files'
         ? 'Click a file to mention it in your prompt.'
         : mode === 'decisions'
-          ? 'Click a decision to push back on it.'
+          ? `Click a decision to push back on it. Share puts them in ${SHARED_FILE}.`
           : 'Click a turn to fold it, a decision to push back on it.'
 
     return (
@@ -1147,19 +1467,32 @@ export const register: Register = on => {
         <Box flexDirection="row" justifyContent="space-between" marginTop={1}>
           <Box flexDirection="row" gap={2}>
             {tab('timeline', 'Timeline', '1')}
-            {tab('decisions', 'Decisions', '2', standing.length)}
+            {tab('decisions', 'Decisions', '2', standing.length, conflicted.size)}
             {tab('files', 'Files', '3', files.length)}
           </Box>
-          <Button
-            key="export"
-            plain
-            hotkey="e"
-            onPress={async () => {
-              $.ui.toast(`Trail saved to ${await exportTrail($)}`)
-            }}
-          >
-            <Text dimColor>Export</Text>
-          </Button>
+          <Box flexDirection="row" gap={2}>
+            <Button
+              key="share"
+              plain
+              hotkey="s"
+              onPress={async () => {
+                $.ui.toast(shareMessage(await shareDecisions($)))
+              }}
+            >
+              <Text dimColor>Share</Text>
+              {toShare > 0 ? <Text color="claude"> {toShare}</Text> : ''}
+            </Button>
+            <Button
+              key="export"
+              plain
+              hotkey="e"
+              onPress={async () => {
+                $.ui.toast(`Trail saved to ${await exportTrail($)}`)
+              }}
+            >
+              <Text dimColor>Export</Text>
+            </Button>
+          </Box>
         </Box>
         <Text color="inactive">{'─'.repeat(W)}</Text>
         {mode === 'timeline' ? timeline() : mode === 'decisions' ? ledger() : filesView()}
@@ -1176,8 +1509,8 @@ export const register: Register = on => {
 // How well `query` names a decision: 3 exactly, 2 a part of it, 1 the
 // decision inside a query not much longer than it, 0 not at all.
 function rank(text: string, query: string) {
-  const a = text.toLowerCase().trim()
-  const b = query.toLowerCase().trim()
+  const a = fold(text)
+  const b = fold(query)
   if (b === '') return 0
   if (a === b) return 3
   if (b.length >= 4 && a.includes(b)) return 2
@@ -1275,6 +1608,133 @@ function filesChanged(list: readonly Entry[]) {
   return [...files.values()].sort((a, b) => b.at - a.at)
 }
 
+// A decision's text as compared: case and spacing aside.
+function fold(text: string) {
+  return text.replace(/\s+/g, ' ').trim().toLowerCase()
+}
+
+function same(a: string, b: string) {
+  return fold(a) === fold(b)
+}
+
+function plural(n: number, word: string) {
+  return `${n} ${word}${n === 1 ? '' : 's'}`
+}
+
+// Which decisions the stored ones replaced, by folded text, and by what.
+function replacements(stored: readonly PastDecision[]) {
+  const gone = new Map<string, string>()
+  for (const one of stored) {
+    if (one.replacedBy !== undefined) gone.set(fold(one.text), one.replacedBy)
+    if (one.replaces !== undefined) gone.set(fold(one.replaces), one.text)
+  }
+
+  return gone
+}
+
+// This session's standing decisions that contradict another still in force,
+// by entry id: one whose other side was replaced since has settled.
+function openConflicts(
+  list: readonly Entry[],
+  stored: readonly PastDecision[],
+  team: readonly SharedDecision[],
+) {
+  const inForce = new Set(
+    [...list.filter(one => one.kind === 'decision'), ...stored, ...team]
+      .filter(one => one.replacedBy === undefined)
+      .map(one => fold(one.text)),
+  )
+
+  return new Set(
+    list
+      .filter(
+        one =>
+          one.kind === 'decision' &&
+          one.replacedBy === undefined &&
+          one.conflictsWith !== undefined &&
+          inForce.has(fold(one.conflictsWith)),
+      )
+      .map(one => one.id),
+  )
+}
+
+// The decisions a share adds: standing, not in the file yet, each text once,
+// less any in an open conflict, which are only counted.
+function shareable<T extends { text: string; replacedBy?: string; conflictsWith?: string }>(
+  local: readonly T[],
+  team: readonly SharedDecision[],
+) {
+  const listed = new Set(team.map(one => fold(one.text)))
+  const standing = local.filter(one => one.replacedBy === undefined && !same(one.text, PLAN))
+  const inForce = new Set(
+    [...team.filter(one => one.replacedBy === undefined), ...standing].map(one => fold(one.text)),
+  )
+  const added: T[] = []
+  const held = new Set<string>()
+  for (const one of standing) {
+    const key = fold(one.text)
+    if (listed.has(key)) continue
+    if (one.conflictsWith !== undefined && inForce.has(fold(one.conflictsWith))) {
+      held.add(key)
+      continue
+    }
+    listed.add(key)
+    added.push(one)
+  }
+
+  return { added, held: held.size }
+}
+
+// One decision of the shared file: `- **text** — why _(who, 2026-10-19)_`,
+// though any bullet counts and every part but the text is optional. A
+// struck-through line is not in force.
+function parseLine(line: string): SharedDecision | undefined {
+  const bullet = /^\s*[-*+]\s+(.+?)\s*$/.exec(line)
+  if (bullet === null) return undefined
+  let body = bullet[1]!
+  if (body.startsWith('~~')) return undefined
+  let who: string | undefined
+  let on: string | undefined
+  // Greedy, so a name with brackets of its own, `Sam (lead)`, stays whole.
+  const meta = /\s*_\((.*)\)_$/.exec(body)
+  if (meta !== null) {
+    body = body.slice(0, meta.index)
+    const parts = meta[1]!.split(',').map(part => part.trim())
+    if (/^\d{4}-\d{2}-\d{2}$/.test(parts[parts.length - 1] ?? '')) on = parts.pop()
+    who = parts.join(', ') || undefined
+  }
+  const bold = /^\*\*(.+?)\*\*(?:\s*[—–-]\s*(.*))?$/.exec(body)
+  const dash = / [—–-] /.exec(body)
+  const text = (bold !== null ? bold[1]! : dash !== null ? body.slice(0, dash.index) : body)
+    .replace(/\*\*/g, '')
+    .trim()
+  const why = (bold !== null ? bold[2] : dash !== null ? body.slice(dash.index + 3) : undefined)?.trim()
+  if (text === '') return undefined
+
+  return {
+    text,
+    ...(why !== undefined && why !== '' ? { why } : {}),
+    ...(who !== undefined ? { who } : {}),
+    ...(on !== undefined ? { on } : {}),
+  }
+}
+
+function parseShared(text: string) {
+  return text
+    .split('\n')
+    .map(parseLine)
+    .filter((one): one is SharedDecision => one !== undefined)
+}
+
+function sharedLine(one: PastDecision, name: string | undefined) {
+  const why = one.why !== undefined ? ` — ${one.why}` : ''
+  const who = one.by === 'claude' ? 'Claude' : name
+  const d = new Date(one.at)
+  const date = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+
+  return `- **${one.text.replace(/\*\*/g, '')}**${why} _(${who !== undefined ? `${who}, ` : ''}${date})_`
+}
+
 function clip(text: string, max: number) {
   const line = text.replace(/\s+/g, ' ').trim()
 
@@ -1312,8 +1772,9 @@ function markdownRow(one: Entry) {
       }
       const why = one.why !== undefined ? ` — ${one.why}` : ''
       const alt = one.alternatives !== undefined ? ` (passed over: ${one.alternatives})` : ''
+      const conflict = one.conflictsWith !== undefined ? ` **Conflicts with:** ${one.conflictsWith}` : ''
 
-      return `**${who} decided:** ${one.text}${why}${alt}${sub}`
+      return `**${who} decided:** ${one.text}${why}${alt}${conflict}${sub}`
     }
     case 'edit':
       return `Changed \`${one.text}\`${one.count !== undefined ? ` ×${one.count}` : ''}${sub}`
@@ -1340,6 +1801,15 @@ function when(ms: number, today: number) {
     d.getFullYear() === t.getFullYear() && d.getMonth() === t.getMonth() && d.getDate() === t.getDate()
 
   return isToday ? clock(ms) : `${MONTHS[d.getMonth()]} ${d.getDate()}`
+}
+
+// A shared file's date, 2026-10-19, as `when` shows a day: Oct 19, or today.
+function day(on: string, today: number) {
+  const [y = 0, m = 1, d = 1] = on.split('-').map(Number)
+  const t = new Date(today)
+  if (y === t.getFullYear() && m === t.getMonth() + 1 && d === t.getDate()) return 'today'
+
+  return `${MONTHS[m - 1] ?? ''} ${d}`
 }
 
 function clock(ms: number, withDate = false) {

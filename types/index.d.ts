@@ -16,6 +16,8 @@ export type Entry = {
   isRunning?: boolean
   isError?: boolean
   isSubagent?: boolean
+  // A standing decision this one appears to contradict, by its text.
+  conflictsWith?: string
 }
 
 export type View = 'timeline' | 'decisions' | 'files'
@@ -27,6 +29,19 @@ export type PastDecision = {
   by: 'user' | 'claude'
   text: string
   why?: string
+  replacedBy?: string
+  // The decision this one replaced, by its text: how a replaced team
+  // decision is known in later sessions.
+  replaces?: string
+  conflictsWith?: string
+}
+
+// A decision in the project's shared file, as written there.
+export type SharedDecision = {
+  text: string
+  why?: string
+  who?: string
+  on?: string
   replacedBy?: string
 }
 
@@ -50,6 +65,7 @@ declare module 'claude-code' {
       view: View
       turn: number
       past: PastDecision[]
+      shared: SharedDecision[]
       live: Live
       // The fold the person chose per turn number: true open, false folded.
       folds: Record<string, boolean>

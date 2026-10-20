@@ -1,6 +1,6 @@
 {
   "name": "trail",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "A live pane of what you asked, what was decided (by you or Claude) and why, and what changed",
   "author": { "name": "m3talen" },
   "homepage": "https://github.com/m3talen/claude-trail",

@@ -1,5 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="794" height="656" viewBox="0 0 794 656">
-<rect width="794" height="656" rx="10" fill="#262626"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="794" height="673" viewBox="0 0 794 673">
+<rect width="794" height="673" rx="10" fill="#262626"/>
 <g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', 'Liberation Mono', monospace" font-size="14">
 <text x="30.4" y="34.6" fill="#ffd700" font-weight="700" xml:space="preserve">● Working 1:13</text>
 <text x="22.0" y="51.6" fill="#d0d0d0" xml:space="preserve">   Editing src/middleware/rate-limit.ts</text>
@@ -11,15 +11,20 @@
 <text x="140.0" y="102.6" fill="#afd7ff" xml:space="preserve">2</text>
 <text x="148.4" y="102.6" fill="#d0d0d0" xml:space="preserve">: Decisions</text>
 <text x="241.2" y="102.6" fill="#949494" xml:space="preserve"> 4</text>
-<text x="274.9" y="102.6" fill="#afd7ff" xml:space="preserve">3</text>
-<text x="283.3" y="102.6" fill="#d0d0d0" xml:space="preserve">: Files</text>
-<text x="342.3" y="102.6" fill="#949494" xml:space="preserve"> 3</text>
+<text x="258.0" y="102.6" fill="#ffd700" xml:space="preserve"> ≠1</text>
+<text x="300.2" y="102.6" fill="#afd7ff" xml:space="preserve">3</text>
+<text x="308.6" y="102.6" fill="#d0d0d0" xml:space="preserve">: Files</text>
+<text x="367.6" y="102.6" fill="#949494" xml:space="preserve"> 3</text>
+<text x="595.2" y="102.6" fill="#afd7ff" xml:space="preserve">s</text>
+<text x="603.7" y="102.6" fill="#d0d0d0" xml:space="preserve">: </text>
+<text x="620.5" y="102.6" fill="#949494" xml:space="preserve">Share</text>
+<text x="662.7" y="102.6" fill="#d78787" xml:space="preserve"> 3</text>
 <text x="696.4" y="102.6" fill="#afd7ff" xml:space="preserve">e</text>
 <text x="704.8" y="102.6" fill="#d0d0d0" xml:space="preserve">: </text>
 <text x="721.7" y="102.6" fill="#949494" xml:space="preserve">Export</text>
 <text x="30.4" y="119.6" fill="#949494" xml:space="preserve">────────────────────────────────────────────────────────────────────────────────────────</text>
 <text x="30.4" y="153.6" fill="#ffd700" xml:space="preserve">┏ </text>
-<text x="47.3" y="153.6" fill="#949494" xml:space="preserve">▾ 23:43</text>
+<text x="47.3" y="153.6" fill="#949494" xml:space="preserve">▾ 08:01</text>
 <text x="106.3" y="153.6" fill="#ffd700" xml:space="preserve"> working</text>
 <text x="30.4" y="170.6" fill="#ffd700" xml:space="preserve">┃ </text>
 <text x="47.3" y="170.6" fill="#d0d0d0" font-weight="700" xml:space="preserve">Rate-limit the magic link endpoint and email me a summary</text>
@@ -30,42 +35,43 @@
 <text x="55.7" y="204.6" fill="#949494" xml:space="preserve">  How much detail should the email have?</text>
 <text x="30.4" y="221.6" fill="#ffd700" xml:space="preserve">┣━ </text>
 <text x="55.7" y="221.6" fill="#d78787" font-weight="700" xml:space="preserve">◆ </text>
-<text x="72.6" y="221.6" fill="#d0d0d0" xml:space="preserve">5 requests per minute per email address</text>
-<text x="30.4" y="238.6" fill="#ffd700" xml:space="preserve">┃  </text>
-<text x="55.7" y="238.6" fill="#949494" xml:space="preserve">  Stops abuse without hurting retries.</text>
+<text x="72.6" y="221.6" fill="#d0d0d0" xml:space="preserve">5 requests per minute per email, in app middleware</text>
+<text x="30.4" y="238.6" fill="#ffd700" xml:space="preserve">┃    ≠ conflicts with &quot;Rate limits live in the API gateway&quot;</text>
 <text x="30.4" y="255.6" fill="#ffd700" xml:space="preserve">┃  </text>
-<text x="55.7" y="255.6" fill="#949494" xml:space="preserve">  passed over: per IP</text>
-<text x="30.4" y="272.6" fill="#ffd700" xml:space="preserve">┗━ </text>
-<text x="55.7" y="272.6" fill="#5f875f" xml:space="preserve">~ </text>
-<text x="72.6" y="272.6" fill="#d0d0d0" xml:space="preserve">src/routes/login.tsx</text>
-<text x="241.2" y="272.6" fill="#949494" xml:space="preserve"> ×1</text>
-<text x="30.4" y="306.6" fill="#ff87af" xml:space="preserve">┏ </text>
-<text x="47.3" y="306.6" fill="#949494" xml:space="preserve">▾ 23:33</text>
-<text x="106.3" y="306.6" fill="#ff87af" xml:space="preserve"> stopped after 1m 01s</text>
-<text x="30.4" y="323.6" fill="#ff87af" xml:space="preserve">┃ </text>
-<text x="47.3" y="323.6" fill="#d0d0d0" font-weight="700" xml:space="preserve">/review src/auth</text>
-<text x="30.4" y="340.6" fill="#ff87af" xml:space="preserve">┗━ </text>
-<text x="55.7" y="340.6" fill="#949494" xml:space="preserve">/ code-review</text>
-<text x="30.4" y="374.6" fill="#949494" xml:space="preserve">┏ ▸ 23:15 1m 35s</text>
-<text x="30.4" y="391.6" fill="#949494" xml:space="preserve">┃ </text>
-<text x="47.3" y="391.6" fill="#d0d0d0" font-weight="700" xml:space="preserve">Use Redis for sessions, we already pay for it</text>
-<text x="30.4" y="408.6" fill="#949494" xml:space="preserve">┣━ </text>
-<text x="55.7" y="408.6" fill="#afd7ff" font-weight="700" xml:space="preserve">◆ you </text>
-<text x="106.3" y="408.6" fill="#d0d0d0" xml:space="preserve">Store sessions in Redis with a 7-day TTL</text>
-<text x="30.4" y="425.6" fill="#949494" xml:space="preserve">┃    Already paid for, and expiry is built in.</text>
-<text x="30.4" y="442.6" fill="#949494" xml:space="preserve">┗━ + 2 changes</text>
-<text x="30.4" y="476.6" fill="#949494" xml:space="preserve">┏ ▸ 23:03 6m 52s</text>
-<text x="30.4" y="493.6" fill="#949494" xml:space="preserve">┃ </text>
-<text x="47.3" y="493.6" fill="#d0d0d0" font-weight="700" xml:space="preserve">Add login with magic links to the dashboard</text>
-<text x="30.4" y="510.6" fill="#949494" xml:space="preserve">┣━ </text>
-<text x="55.7" y="510.6" fill="#d78787" font-weight="700" xml:space="preserve">◆ </text>
-<text x="72.6" y="510.6" fill="#d0d0d0" xml:space="preserve">Magic links over OAuth for v1</text>
-<text x="30.4" y="527.6" fill="#949494" xml:space="preserve">┃    No provider setup, and the users are internal.</text>
-<text x="30.4" y="544.6" fill="#949494" xml:space="preserve">┃    passed over: Google OAuth, passwords</text>
-<text x="30.4" y="561.6" fill="#949494" xml:space="preserve">┣━ </text>
-<text x="55.7" y="561.6" fill="#949494" font-weight="700" xml:space="preserve">◇ </text>
-<text x="72.6" y="561.6" fill="#949494" text-decoration="line-through" xml:space="preserve">Store sessions in Postgres</text>
-<text x="30.4" y="578.6" fill="#949494" xml:space="preserve">┃    replaced by Store sessions in Redis with a 7-day TTL</text>
-<text x="30.4" y="595.6" fill="#949494" xml:space="preserve">┗━ + 5 changes</text>
-<text x="30.4" y="629.6" fill="#949494" xml:space="preserve">Click a turn to fold it, a decision to push back on it.</text>
+<text x="55.7" y="255.6" fill="#949494" xml:space="preserve">  Stops abuse without hurting retries.</text>
+<text x="30.4" y="272.6" fill="#ffd700" xml:space="preserve">┃  </text>
+<text x="55.7" y="272.6" fill="#949494" xml:space="preserve">  passed over: per IP</text>
+<text x="30.4" y="289.6" fill="#ffd700" xml:space="preserve">┗━ </text>
+<text x="55.7" y="289.6" fill="#5f875f" xml:space="preserve">~ </text>
+<text x="72.6" y="289.6" fill="#d0d0d0" xml:space="preserve">src/routes/login.tsx</text>
+<text x="241.2" y="289.6" fill="#949494" xml:space="preserve"> ×1</text>
+<text x="30.4" y="323.6" fill="#ff87af" xml:space="preserve">┏ </text>
+<text x="47.3" y="323.6" fill="#949494" xml:space="preserve">▾ 07:51</text>
+<text x="106.3" y="323.6" fill="#ff87af" xml:space="preserve"> stopped after 1m 01s</text>
+<text x="30.4" y="340.6" fill="#ff87af" xml:space="preserve">┃ </text>
+<text x="47.3" y="340.6" fill="#d0d0d0" font-weight="700" xml:space="preserve">/review src/auth</text>
+<text x="30.4" y="357.6" fill="#ff87af" xml:space="preserve">┗━ </text>
+<text x="55.7" y="357.6" fill="#949494" xml:space="preserve">/ code-review</text>
+<text x="30.4" y="391.6" fill="#949494" xml:space="preserve">┏ ▸ 07:33 1m 35s</text>
+<text x="30.4" y="408.6" fill="#949494" xml:space="preserve">┃ </text>
+<text x="47.3" y="408.6" fill="#d0d0d0" font-weight="700" xml:space="preserve">Use Redis for sessions, we already pay for it</text>
+<text x="30.4" y="425.6" fill="#949494" xml:space="preserve">┣━ </text>
+<text x="55.7" y="425.6" fill="#afd7ff" font-weight="700" xml:space="preserve">◆ you </text>
+<text x="106.3" y="425.6" fill="#d0d0d0" xml:space="preserve">Store sessions in Redis with a 7-day TTL</text>
+<text x="30.4" y="442.6" fill="#949494" xml:space="preserve">┃    Already paid for, and expiry is built in.</text>
+<text x="30.4" y="459.6" fill="#949494" xml:space="preserve">┗━ + 2 changes</text>
+<text x="30.4" y="493.6" fill="#949494" xml:space="preserve">┏ ▸ 07:21 6m 52s</text>
+<text x="30.4" y="510.6" fill="#949494" xml:space="preserve">┃ </text>
+<text x="47.3" y="510.6" fill="#d0d0d0" font-weight="700" xml:space="preserve">Add login with magic links to the dashboard</text>
+<text x="30.4" y="527.6" fill="#949494" xml:space="preserve">┣━ </text>
+<text x="55.7" y="527.6" fill="#d78787" font-weight="700" xml:space="preserve">◆ </text>
+<text x="72.6" y="527.6" fill="#d0d0d0" xml:space="preserve">Magic links over OAuth for v1</text>
+<text x="30.4" y="544.6" fill="#949494" xml:space="preserve">┃    No provider setup, and the users are internal.</text>
+<text x="30.4" y="561.6" fill="#949494" xml:space="preserve">┃    passed over: Google OAuth, passwords</text>
+<text x="30.4" y="578.6" fill="#949494" xml:space="preserve">┣━ </text>
+<text x="55.7" y="578.6" fill="#949494" font-weight="700" xml:space="preserve">◇ </text>
+<text x="72.6" y="578.6" fill="#949494" text-decoration="line-through" xml:space="preserve">Store sessions in Postgres</text>
+<text x="30.4" y="595.6" fill="#949494" xml:space="preserve">┃    replaced by Store sessions in Redis with a 7-day TTL</text>
+<text x="30.4" y="612.6" fill="#949494" xml:space="preserve">┗━ + 5 changes</text>
+<text x="30.4" y="646.6" fill="#949494" xml:space="preserve">Click a turn to fold it, a decision to push back on it.</text>
 </g></svg>
